@@ -49,10 +49,10 @@ export class NavGrid {
     return idx >= 0 && !Number.isNaN(this.floor[idx]);
   }
 
-  // Nearest walkable cell to (x, z) within `radius` metres whose floor is near y.
+  // Nearest walkable cell to (x, z) within `radius` metres, preferring floors near height y.
   nearest(x, y, z, radius = 2) {
     const c = this.index(x, z);
-    if (this.walkable(c) && Math.abs(this.floor[c] - y) < 1.2) return c;
+    if (this.walkable(c) && Math.abs(this.floor[c] - y) < 0.35) return c;
     const R = Math.ceil(radius / this.cell);
     const ci = Math.floor((x - this.x0) / this.cell), cj = Math.floor((z - this.z0) / this.cell);
     let best = -1, bd = Infinity;
@@ -61,8 +61,10 @@ export class NavGrid {
         const i = ci + di, j = cj + dj;
         if (i < 0 || j < 0 || i >= this.w || j >= this.h) continue;
         const idx = j * this.w + i;
-        if (!this.walkable(idx) || Math.abs(this.floor[idx] - y) > 1.6) continue;
-        const d = di * di + dj * dj;
+        if (!this.walkable(idx)) continue;
+        const dy = Math.abs(this.floor[idx] - y);
+        if (dy > 1.6) continue;
+        const d = di * di + dj * dj + (dy * 6) ** 2;
         if (d < bd) { bd = d; best = idx; }
       }
     }

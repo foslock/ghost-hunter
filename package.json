@@ -5,11 +5,14 @@
   "type": "module",
   "description": "First-person multiplayer hide-and-seek: invisible ghosts smuggle a relic past the hunters.",
   "scripts": {
-    "dev": "node --watch-path=server --watch-path=shared server/index.js --dev",
+    "dev": "node server/index.js --dev",
     "build": "vite build",
     "start": "node server/index.js",
     "test": "node --test test/",
-    "maps": "bash blender/build_all.sh"
+    "maps": "bash blender/build_all.sh",
+    "sim": "node scripts/sim.mjs",
+    "check": "node scripts/check-map.mjs",
+    "dev:watch": "node --watch-path=server --watch-path=shared/constants.js --watch-path=shared/collision.js --watch-path=shared/nav.js --watch-path=shared/archetypes.js server/index.js --dev"
   },
   "dependencies": {
     "three": "^0.186.1",
