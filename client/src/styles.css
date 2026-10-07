@@ -87,11 +87,13 @@ kbd {
 @media (max-width: 720px) { .howto { grid-template-columns: 1fr; } }
 
 /* ---------------------------------------------------------------- lobby */
-.lobby { align-items: stretch; }
-.lobby-grid { width: min(1180px, 100%); display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; max-height: 100%; }
+.lobby { align-items: flex-start; overflow-y: auto; }
+.lobby-grid { margin: auto 0; }
+.lobby-grid { width: min(1180px, 100%); display: grid; grid-template-columns: 1.15fr 1fr; gap: 18px; }
 .lobby-col { display: flex; flex-direction: column; gap: 18px; min-height: 0; }
 .lobby .panel { padding: 18px 20px; }
-.room-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.room-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.room-head .btn { white-space: nowrap; }
 .room-code { font-family: var(--display); font-size: 40px; letter-spacing: .25em; color: var(--brass); }
 .maps { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 10px; margin-top: 12px; }
 .map-card { position: relative; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; cursor: pointer; background: #0c0b14; text-align: left; padding: 0; color: inherit; }
