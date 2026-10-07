@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { PropCtl } from '../game/props.js';
 import { loadGLB, loadMapData } from '../game/game.js';
+import { makeEnvironment } from '../game/environment.js';
 
 export class MenuBackdrop {
   constructor(renderer) {
@@ -39,6 +40,8 @@ export class MenuBackdrop {
     scene.background = new THREE.Color(env.sky || '#0b0a12');
     const fog = env.fog || { color: env.sky || '#101320', near: 8, far: 50 };
     scene.fog = new THREE.Fog(fog.color, fog.near, fog.far);
+    scene.environment = makeEnvironment(this.renderer, env);
+    scene.environmentIntensity = env.envIntensity ?? 0.45;
     const hemi = env.hemi || { sky: '#7c88b8', ground: '#2a2018', intensity: 0.5 };
     scene.add(new THREE.HemisphereLight(hemi.sky, hemi.ground, (hemi.intensity ?? 0.5) * 1.6));
     if (env.moon) {

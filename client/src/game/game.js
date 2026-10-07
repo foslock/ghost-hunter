@@ -17,6 +17,7 @@ import { Avatar } from './avatars.js';
 import { LocalPlayer } from './player.js';
 import { Hud, MAX_CD } from './hud.js';
 import { Input } from './input.js';
+import { makeEnvironment } from './environment.js';
 
 const mapModules = import.meta.glob('../../../shared/maps/*.json');
 
@@ -134,6 +135,8 @@ export class GameView {
       this.moon = moon;
     }
     if (env.stars) scene.add(makeSky(env, cx, cz));
+    scene.environment = makeEnvironment(this.renderer, env);
+    scene.environmentIntensity = env.envIntensity ?? 0.45;
 
     const level = gltf.scene.clone(true);
     level.traverse((o) => {

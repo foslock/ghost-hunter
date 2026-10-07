@@ -95,7 +95,7 @@ def palette(m):
     P.glass = m.mat('glass_dark', '#26303a', rough=0.12, metal=0.2)
     P.bottle = m.mat('bottle_green', '#35513a', rough=0.15)
     P.mirror = m.mat('mirror', image=_mirror(), uv=2.2, rough=0.08, metal=0.3)
-    P.puddle = m.mat('puddle', '#14172a', rough=0.04, metal=0.3)
+    P.puddle = m.mat('puddle', '#39405c', rough=0.08, metal=0.0)
     P.leaf = [m.mat('leaf1', '#1f2b1e'), m.mat('leaf2', '#29331f')]
     P.bark = m.mat('bark', '#2b221b')
     P.balloons = [m.mat('balloon_red', '#c0443a', rough=0.25), m.mat('balloon_teal', '#4b9890', rough=0.25),
