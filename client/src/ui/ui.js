@@ -27,6 +27,33 @@ export class UI {
     this.screen = null;
   }
 
+  howtoHtml() {
+    return `
+        <div class="panel howto">
+          <div class="ghost"><h3>Ghosts</h3><ul>
+            <li>Invisible to hunters — and to each other unless within ${GHOST.seeRadius} m.</li>
+            <li>Carry the relic to the capture altar three times before time runs out. Your grip tires; pass it on.</li>
+            <li><kbd>LMB</kbd> snap (heard ${GHOST.snapRadius} m), <kbd>F</kbd> whistle (loud, cooldown).</li>
+            <li><kbd>E</kbd> subtle haunt (natural-looking), <kbd>Q</kbd> big haunt (loud, cooldown).</li>
+            <li>Linger together too long and you're exposed.</li></ul></div>
+          <div class="hunter"><h3>Hunters</h3><ul>
+            <li>You can't see ghosts. Listen for snaps, whistles and the relic's hum.</li>
+            <li>Watch the room: clocks running backwards, curtains breathing, doors easing open.</li>
+            <li><kbd>LMB</kbd> fires the revealer cone (${HUNTER.rayRange} m). It freezes ghosts and resets a carried relic.</li>
+            <li>The carried relic drips glowing ectoplasm. Follow the trail.</li></ul></div>
+        </div>`;
+  }
+
+  showHowto() {
+    const m = document.createElement('div');
+    m.className = 'screen modal';
+    m.style.background = 'rgba(5,4,10,.7)';
+    m.style.zIndex = 5;
+    m.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px;align-items:center">${this.howtoHtml()}<button class="btn primary">Got it</button></div>`;
+    m.onclick = (e) => { if (e.target === m || e.target.tagName === 'BUTTON') m.remove(); };
+    this.root.append(m);
+  }
+
   // ---------------------------------------------------------------- home
   showHome() {
     this.screen = 'home';
@@ -41,19 +68,8 @@ export class UI {
           <div class="divider">or join friends</div>
           <div class="join"><input id="code" type="text" maxlength="4" placeholder="CODE" value="${esc(code)}" autocomplete="off" /><button class="btn" id="join">Join</button></div>
         </div>
-        <div class="panel howto">
-          <div class="ghost"><h3>Ghosts</h3><ul>
-            <li>Invisible to hunters — and to each other unless within ${GHOST.seeRadius} m.</li>
-            <li>Carry the relic to the capture altar three times before time runs out. Your grip tires; pass it on.</li>
-            <li><kbd>LMB</kbd> snap (heard ${GHOST.snapRadius} m), <kbd>F</kbd> whistle (loud, cooldown).</li>
-            <li><kbd>E</kbd> subtle haunt (natural-looking), <kbd>Q</kbd> big haunt (loud, cooldown).</li>
-            <li>Linger together too long and you're exposed.</li></ul></div>
-          <div class="hunter"><h3>Hunters</h3><ul>
-            <li>You can't see ghosts. Listen for snaps, whistles and the relic's hum.</li>
-            <li>Watch the room: clocks running backwards, curtains breathing, doors easing open.</li>
-            <li><kbd>LMB</kbd> fires the revealer cone (${HUNTER.rayRange} m). It freezes ghosts and resets a carried relic.</li>
-            <li>The carried relic drips glowing ectoplasm. Follow the trail.</li></ul></div>
-        </div>
+        ${this.howtoHtml()}
+        ${matchMedia('(pointer: coarse)').matches ? '<div class="muted">Ghost Hunter needs a keyboard and mouse.</div>' : ''}
       </div>`;
     const nameEl = this.root.querySelector('#name');
     const codeEl = this.root.querySelector('#code');
@@ -89,7 +105,7 @@ export class UI {
               <div class="panel">
                 <div class="room-head">
                   <div><div class="muted">Room code</div><div class="room-code"></div></div>
-                  <div style="display:flex;gap:8px"><button class="btn small" id="copy">Copy invite link</button><button class="btn small" id="leave">Leave</button></div>
+                  <div style="display:flex;gap:8px"><button class="btn small" id="howto">How to play</button><button class="btn small" id="copy">Copy invite link</button><button class="btn small" id="leave">Leave</button></div>
                 </div>
                 <div class="last-round muted" id="last"></div>
               </div>
@@ -105,6 +121,7 @@ export class UI {
             </div>
           </div>
         </div>`;
+      this.root.querySelector('#howto').onclick = () => this.showHowto();
       this.root.querySelector('#copy').onclick = () => {
         const url = `${location.origin}${location.pathname}?room=${this.room.code}`;
         navigator.clipboard?.writeText(url).then(() => this.toast('Invite link copied.'), () => this.toast(url));
