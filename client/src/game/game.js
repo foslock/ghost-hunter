@@ -191,6 +191,8 @@ export class GameView {
       this.camera.add(this.viewModel);
       this.lens = this.viewModel.getObjectByName('revealer_lens');
     } else {
+      this.nubs = makeGhostNubs(this.characters, this.roster.get(this.me)?.color || '#cdeeff');
+      this.camera.add(this.nubs);
       this.heldRelic = this.characters.make('relic');
       this.heldRelic.scale.setScalar(0.9);
       this.heldRelic.position.set(0, -0.36, -0.55);
@@ -298,6 +300,7 @@ export class GameView {
 
   // ---------------------------------------------------------------- actions
   doSnap() {
+    this.nubAnim = { kind: 'snap', t0: performance.now() / 1000 };
     this.audio.play('snap', null, { volume: 0.55 });
     this.net.send({ t: 'snap' });
     this.snapHand = performance.now();
@@ -305,6 +308,7 @@ export class GameView {
 
   doWhistle() {
     if ((this.snap?.you.wc ?? 0) > 0) return;
+    this.nubAnim = { kind: 'whistle', t0: performance.now() / 1000 };
     this.audio.play('whistle', null, { volume: 0.5 });
     this.net.send({ t: 'whistle' });
   }
@@ -312,6 +316,7 @@ export class GameView {
   doManip(k) {
     if (!this.target) return;
     if (k === 'b' && (this.snap?.you.bc ?? 0) > 0) return;
+    this.nubAnim = { kind: k === 'b' ? 'big' : 'subtle', t0: performance.now() / 1000 };
     this.net.send({ t: 'manip', prop: this.target.id, k });
   }
 
@@ -563,7 +568,30 @@ export class GameView {
     if (s?.hum && Math.random() < dt * 0.7) this.indicate(s.hum, 'hum');
   }
 
+  updateNubs(t) {
+    if (!this.nubs) return;
+    const [l, r] = this.nubs.children;
+    const a = this.nubAnim;
+    const el = a ? performance.now() / 1000 - a.t0 : 99;
+    const k = (d) => (el < d ? Math.sin((el / d) * Math.PI) : 0);
+    const sway = Math.sin(t * 1.3) * 0.01;
+    const carry = this.player.carrying ? 0.05 : 0;
+    l.position.set(-0.3, -0.42 + sway + carry, -0.5);
+    r.position.set(0.3, -0.42 - sway + carry, -0.5);
+    l.rotation.set(-0.7, 0, 0.35);
+    r.rotation.set(-0.7, 0, -0.35);
+    if (a?.kind === 'snap') { r.position.y += k(0.22) * 0.07; r.rotation.z -= k(0.22) * 0.5; }
+    if (a?.kind === 'whistle') { const v = k(1.0) * 0.06; l.position.y += v; r.position.y += v; l.position.x += v; r.position.x -= v; }
+    if (a?.kind === 'subtle') { r.position.z -= k(0.6) * 0.12; r.position.x -= k(0.6) * 0.06; }
+    if (a?.kind === 'big') { const v = k(0.5); r.position.z -= v * 0.22; l.position.z -= v * 0.22; r.position.y += v * 0.08; l.position.y += v * 0.08; }
+    const mat = this.nubs.userData.mat;
+    mat.uniforms.uTime.value = t;
+    mat.uniforms.uOpacity.value = (this.snap?.you.fz ?? 0) > 0 ? 0.18 : 0.3;
+    mat.uniforms.uFrozen.value = (this.snap?.you.fz ?? 0) > 0 ? 1 : 0;
+  }
+
   updateViewModel(t, dt) {
+    this.updateNubs(t);
     if (!this.viewModel) return;
     const stride = Math.floor(this.player.bob / Math.PI);
     if (stride !== this.lastStride && this.player.moving > 1.5 && this.player.body.onGround) {
@@ -716,6 +744,35 @@ export class GameView {
     });
     this.composer?.dispose?.();
   }
+}
+
+// Two wispy sheet nubs at the bottom of a ghost's view; they flick when snapping or haunting.
+function makeGhostNubs(chars, color) {
+  const g = new THREE.Group();
+  const mat = ghostMaterialFor(chars, color);
+  mat.depthTest = false;
+  const prof = [];
+  for (let i = 0; i <= 14; i++) {
+    const y = i / 14;
+    prof.push(new THREE.Vector2(Math.max(0.001, 0.07 * Math.sqrt(Math.max(0, 1 - y ** 2.2)) * (1 + 0.25 * (1 - y))), y * 0.26));
+  }
+  const geo = new THREE.LatheGeometry(prof, 28);
+  for (let i = 0; i < 2; i++) {
+    const m = new THREE.Mesh(geo, mat);
+    m.renderOrder = 20;
+    m.scale.set(0.8, 1, 0.55);
+    g.add(m);
+  }
+  g.userData.mat = mat;
+  return g;
+}
+
+function ghostMaterialFor(chars, color) {
+  const o = chars.makeGhost(color);
+  const mat = o.userData.ghostMat;
+  mat.uniforms.uMinY.value = 0;
+  mat.uniforms.uMaxY.value = 0.3;
+  return mat;
 }
 
 // where a ghost holds the relic: in front of its arm nubs
