@@ -110,6 +110,7 @@ export class Game {
     if (yaw !== undefined) p.yaw = yaw;
     p.tpSeq++;
     p.lastMove = this.time;
+    p.lastTpSent = this.time;
     if (!p.isBot) this.room.send(p.id, { t: 'tp', p: [p.pos.x, p.pos.y, p.pos.z], yaw: p.yaw, seq: p.tpSeq });
     if (p.bot) p.bot.onTeleport();
   }
@@ -117,7 +118,14 @@ export class Game {
   // ------------------------------------------------------------ input from clients / bots
   onState(p, msg) {
     if (!this.playing() && this.phase !== PHASE.RESULTS) return;
-    if (msg.tp !== p.tpSeq) return; // stale: sent before our last teleport
+    if (msg.tp !== p.tpSeq) {
+      // stale: sent before our last teleport. If it persists the client missed it, so resend.
+      if (this.time - (p.lastTpSent || 0) > 1.5) {
+        p.lastTpSent = this.time;
+        if (!p.isBot) this.room.send(p.id, { t: 'tp', p: [p.pos.x, p.pos.y, p.pos.z], yaw: p.yaw, seq: p.tpSeq });
+      }
+      return;
+    }
     const [x, y, z] = msg.p;
     if (![x, y, z, msg.y, msg.pi].every(Number.isFinite)) return;
     p.yaw = msg.y;
