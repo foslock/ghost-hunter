@@ -14,6 +14,7 @@ node scripts/check-map.mjs <id> --ascii
 ```
 
 `--moody` renders previews with the in-game night lighting instead of bright inspection lighting.
+Geometry is exported with meshopt compression (decoded by the client); `--no-compress` disables it.
 `--blend` also saves `blender/build/<id>.blend` for inspection.
 
 ## Coordinates and scale

@@ -852,6 +852,7 @@ class MapBuilder:
             filepath=glb, export_format='GLB', export_apply=False, export_yup=True,
             export_lights=False, export_cameras=False, use_selection=False, export_animations=False,
             export_extras=False, export_image_format='AUTO', export_materials='EXPORT',
+            export_meshopt_compression_enable='--no-compress' not in args,  # client decodes EXT_meshopt_compression
         )
         data = self._json()
         with open(os.path.join(MAP_JSON_DIR, f'{self.id}.json'), 'w') as f:

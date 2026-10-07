@@ -2,6 +2,7 @@
 // interpolated avatars of other players.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { GHOST, PF, ROLES } from '../../../shared/constants.js';
 
 // ------------------------------------------------------------------ ghost shader
@@ -175,7 +176,7 @@ export class Characters {
 
   async load() {
     try {
-      const gltf = await new GLTFLoader().loadAsync('/models/characters.glb');
+      const gltf = await new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync('/models/characters.glb');
       for (const name of ['ghost', 'hunter', 'relic', 'revealer', 'altar_glow']) {
         const o = gltf.scene.getObjectByName(name);
         if (o) {

@@ -2,6 +2,7 @@
 // server's snapshots and events.
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
@@ -27,7 +28,7 @@ export async function loadMapData(id) {
 
 const gltfCache = new Map();
 export function loadGLB(url) {
-  if (!gltfCache.has(url)) gltfCache.set(url, new GLTFLoader().loadAsync(url));
+  if (!gltfCache.has(url)) gltfCache.set(url, new GLTFLoader().setMeshoptDecoder(MeshoptDecoder).loadAsync(url));
   return gltfCache.get(url);
 }
 
