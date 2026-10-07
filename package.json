@@ -8,7 +8,7 @@
     "dev": "node server/index.js --dev",
     "build": "vite build",
     "start": "node server/index.js",
-    "test": "node --test test/",
+    "test": "node --test test/*.test.js",
     "maps": "bash blender/build_all.sh",
     "sim": "node scripts/sim.mjs",
     "check": "node scripts/check-map.mjs",
