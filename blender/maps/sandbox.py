@@ -1,4 +1,5 @@
 """Small test arena used for engine development."""
+import math
 import os
 import sys
 
@@ -40,7 +41,7 @@ m.place(pf.candelabra, 'flame', 'Candelabra', (4, 4, 0.8), metal=brass, wax=wax)
 m.put(pf.table, (4, 4, 0), w=1.6, d=0.9, h=0.8, wood=wood)
 m.place(pf.door, 'hinge', 'Door', (-9, 0, 0), w=1.4, h=2.4, wood=wood, frame=dark, handle=brass)
 m.place(pf.tree, 'foliage', 'Potted Fern', (8, -2, 0), bark=bark, leaves=leaf, h=3, crown=1.0, seed=3)
-m.place(pf.curtains, 'cloth', 'Curtains', (6, -13.75, 3.2), w=1.8, h=2.4, fabric=velvet, rod=brass)
+m.place(pf.curtains, 'cloth', 'Curtains', (6, -13.75, 3.2), rz=math.pi, w=1.8, h=2.4, fabric=velvet, rod=brass)
 m.place(pf.globe, 'spin', 'Globe', (-4, 6, 0), wood=wood, brass=brass, sea=m.mat('sea', '#2d4a5a'), land=m.mat('land', '#a08850'))
 m.place(pf.crate, 'jolt', 'Crate', (10, 4, 0), wood=wood, dark=dark)
 m.place(pf.portrait, 'swing', 'Portrait', (-2, 13.82, 2.6), rz=0, w=1.0, h=1.3, frame=brass, canvas=velvet)
