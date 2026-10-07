@@ -27,7 +27,7 @@ export class Hud {
     this.feedBox = el('div', 'feed');
     this.cross = el('div', `crosshair ${ghost ? 'ghostx' : ''}`);
     this.ringSvg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    this.ringSvg.setAttribute('viewBox', '-110 -110 220 220');
+    this.ringSvg.setAttribute('viewBox', '-150 -150 300 300');
     this.ringSvg.setAttribute('class', 'ring');
     this.prompt = el('div', 'prompt hidden');
     this.bracket = el('div', 'bracket hidden');
@@ -134,7 +134,7 @@ export class Hud {
   }
 
   // A directional arc around the crosshair pointing to where a sound came from.
-  indicate(angle, kind) {
+  indicate(angle, kind, label) {
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     const span = kind === 'whistle' ? 0.5 : kind === 'big' ? 0.35 : 0.28;
     const r = kind === 'whistle' ? 98 : 84;
@@ -151,6 +151,18 @@ export class Hud {
     const born = performance.now();
     const life = kind === 'whistle' ? 2600 : 1700;
     this.indicators.push({ path, born, life });
+    if (label) {
+      const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      const lr = r + 14;
+      text.setAttribute('x', (Math.sin(angle) * lr).toFixed(1));
+      text.setAttribute('y', (-Math.cos(angle) * lr + 4).toFixed(1));
+      text.setAttribute('text-anchor', Math.abs(Math.sin(angle)) < 0.3 ? 'middle' : Math.sin(angle) > 0 ? 'start' : 'end');
+      text.setAttribute('fill', label.color || color);
+      text.setAttribute('font-size', '12');
+      text.textContent = label.text;
+      this.ringSvg.append(text);
+      this.indicators.push({ path: text, born, life });
+    }
   }
 
   tick() {
@@ -182,8 +194,9 @@ export class Hud {
       const off = cv.z > 0 || x < pad || x > w - pad || y < pad || y > h - pad;
       if (off) {
         const a = Math.atan2(cv.x, cv.y);
+        // ellipse centred slightly high so pinned markers stay clear of the ability bar
         x = w / 2 + Math.sin(a) * (w / 2 - pad);
-        y = h / 2 - Math.cos(a) * (h / 2 - pad);
+        y = h / 2 - 40 - Math.cos(a) * (h / 2 - pad - 60);
       }
       e.style.left = `${x}px`;
       e.style.top = `${y}px`;

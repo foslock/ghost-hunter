@@ -69,7 +69,7 @@ kbd {
 
 /* ---------------------------------------------------------------- home */
 .screen { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; }
-.backdrop { background: radial-gradient(ellipse at 50% 30%, rgba(60, 40, 80, .55), rgba(8, 7, 14, .92) 70%); }
+.backdrop { background: radial-gradient(ellipse at 50% 40%, rgba(30, 22, 44, .35), rgba(8, 7, 14, .82) 75%); }
 .home { flex-direction: column; gap: 28px; }
 .title { text-align: center; }
 .title h1 { font-size: clamp(54px, 9vw, 112px); line-height: .9; color: var(--parchment); text-shadow: 0 0 30px rgba(159,232,255,.35), 0 4px 0 #000; }
@@ -155,7 +155,7 @@ kbd {
 #hud .crosshair::after { left: 4px; top: 10px; width: 14px; height: 2px; }
 #hud .crosshair.ghostx::before, #hud .crosshair.ghostx::after { display: none; }
 #hud .crosshair.ghostx { border: 1.5px solid rgba(190,240,255,.7); border-radius: 50%; width: 10px; height: 10px; }
-#hud .ring { position: absolute; left: 50%; top: 50%; width: 220px; height: 220px; transform: translate(-50%, -50%); }
+#hud .ring { position: absolute; left: 50%; top: 50%; width: 300px; height: 300px; transform: translate(-50%, -50%); overflow: visible; }
 #hud .ring .arc { position: absolute; inset: 0; }
 #hud .prompt { position: absolute; left: 50%; top: calc(50% + 34px); transform: translateX(-50%); text-align: center; white-space: nowrap; }
 #hud .prompt b { font-family: var(--display); font-weight: 400; font-size: 19px; display: block; color: var(--ghost); }

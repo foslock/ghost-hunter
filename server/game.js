@@ -275,7 +275,7 @@ export class Game {
       }
     }
 
-    for (const p of this.players.values()) if (p.bot) p.bot.update(dt);
+    if (!this.botsPaused) for (const p of this.players.values()) if (p.bot) p.bot.update(dt);
 
     // freeze -> penalty -> release
     const pspawns = this.map.penalty.spawns;

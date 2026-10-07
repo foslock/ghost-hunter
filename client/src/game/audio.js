@@ -445,7 +445,19 @@ export class AudioEngine {
     comp.ratio.value = 4;
     this.master.connect(comp).connect(this.ctx.destination);
     this.loading = Promise.all(Object.entries(DEFS).map(async ([name, [dur, fn]]) => {
-      this.buffers.set(name, await render(dur, fn));
+      const buf = await render(dur, fn);
+      // even out levels: loud events peak near 0.9, soft variants and UI blips much lower
+      const target = name.endsWith('_soft') ? 0.32 : ['tick', 'hum'].includes(name) ? 0 : 0.9;
+      if (target) {
+        const d = buf.getChannelData(0);
+        let peak = 0;
+        for (let i = 0; i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]));
+        if (peak > 1e-4) {
+          const k = target / peak;
+          for (let i = 0; i < d.length; i++) d[i] *= k;
+        }
+      }
+      this.buffers.set(name, buf);
     }));
     return this.loading;
   }

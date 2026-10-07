@@ -229,6 +229,7 @@ export class GameView {
     const composer = new EffectComposer(this.renderer);
     composer.addPass(new RenderPass(scene, this.camera));
     this.bloom = new UnrealBloomPass(size, 0.55, 0.6, 0.82);
+    this.bloom.enabled = this.app.bloomEnabled ? this.app.bloomEnabled() : true;
     composer.addPass(this.bloom);
     this.final = new ShaderPass(FinalShader);
     composer.addPass(this.final);
@@ -352,11 +353,11 @@ export class GameView {
     switch (ev.e) {
       case 'snap':
         this.audio.play('snap', ev.p);
-        this.indicate(ev.p, 'snap');
+        this.indicate(ev.p, 'snap', ev.id);
         break;
       case 'whistle':
         this.audio.play('whistle', ev.p);
-        this.indicate(ev.p, 'whistle');
+        this.indicate(ev.p, 'whistle', ev.id);
         break;
       case 'manip': {
         const p = this.props.get(ev.prop);
@@ -430,13 +431,15 @@ export class GameView {
     }
   }
 
-  indicate(p, kind) {
+  // Direction arc around the crosshair; ghosts also learn which teammate made the sound.
+  indicate(p, kind, fromId) {
     const cam = this.camera;
     const dx = p[0] - cam.position.x, dz = p[2] - cam.position.z;
     if (Math.hypot(dx, dz) < 0.6) return;
     const world = Math.atan2(dx, -dz);
-    const fwd = Math.atan2(-Math.sin(this.player.yaw), -(-Math.cos(this.player.yaw)));
-    this.hud.indicate(world - fwd, kind);
+    const fwd = Math.atan2(-Math.sin(this.player.yaw), Math.cos(this.player.yaw));
+    const who = fromId && this.roster.get(fromId);
+    this.hud.indicate(world - fwd, kind, who ? { text: `${who.name} · ${Math.round(Math.hypot(dx, dz))}m`, color: who.color } : null);
   }
 
   onEnd(m) {
@@ -501,7 +504,7 @@ export class GameView {
         const target = new THREE.Vector3(r.p[0], r.p[1], r.p[2]);
         if (r.s === 'carried') {
           const a = this.avatars.get(r.h);
-          if (a && a.alpha > 0.02) target.set(a.pos.x, a.pos.y + 1.0, a.pos.z);
+          if (a && a.alpha > 0.02) carriedBy(a, target);
         }
         if (!this.relicVis.has || this.relicVis.pos.distanceTo(target) > 4) this.relicVis.pos.copy(target);
         else this.relicVis.pos.lerp(target, Math.min(1, dt * 10));
@@ -528,7 +531,7 @@ export class GameView {
       // hunters only see the relic on a visible carrier
       for (const a of this.avatars.values()) {
         if (a.role === ROLES.GHOST && (a.flags & PF.CARRYING) && a.alpha > 0.05) {
-          this.relicVis.pos.set(a.pos.x, a.pos.y + 1.0, a.pos.z);
+          carriedBy(a, this.relicVis.pos);
           show = true;
         }
       }
@@ -708,6 +711,11 @@ export class GameView {
     });
     this.composer?.dispose?.();
   }
+}
+
+// where a ghost holds the relic: in front of its arm nubs
+function carriedBy(a, out) {
+  return out.set(a.pos.x - Math.sin(a.yaw) * 0.42, a.pos.y + 0.78, a.pos.z - Math.cos(a.yaw) * 0.42);
 }
 
 function round(v) {

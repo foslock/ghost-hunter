@@ -5,14 +5,21 @@ import { AudioEngine } from './game/audio.js';
 import { Characters } from './game/avatars.js';
 import { GameView } from './game/game.js';
 import { UI } from './ui/ui.js';
+import { MenuBackdrop } from './ui/backdrop.js';
 
 const canvas = document.getElementById('view');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, powerPreference: 'high-performance' });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+const QUALITY = {
+  high: { ratio: 2, bloom: true, shadows: true },
+  balanced: { ratio: 1.5, bloom: true, shadows: true },
+  low: { ratio: 1, bloom: false, shadows: false },
+};
+const quality = QUALITY[localStorage.getItem('gh.quality')] ? localStorage.getItem('gh.quality') : 'balanced';
+renderer.setPixelRatio(Math.min(devicePixelRatio, QUALITY[quality].ratio));
 renderer.setSize(innerWidth, innerHeight, false);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = QUALITY[quality].shadows;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
 const app = {
@@ -20,7 +27,20 @@ const app = {
   audio: new AudioEngine(),
   renderer,
   characters: new Characters(),
-  settings: { fov: Number(localStorage.getItem('gh.fov') || 75) },
+  settings: { fov: Number(localStorage.getItem('gh.fov') || 75), quality },
+  setQuality(q) {
+    const Q = QUALITY[q] || QUALITY.balanced;
+    app.settings.quality = q;
+    localStorage.setItem('gh.quality', q);
+    renderer.setPixelRatio(Math.min(devicePixelRatio, Q.ratio));
+    if (app.game) {
+      app.game.bloom.enabled = Q.bloom;
+      app.game.resize();
+    }
+    // shadows need shader recompiles, so they switch at the next round
+    renderer.shadowMap.enabled = Q.shadows;
+  },
+  bloomEnabled: () => (QUALITY[app.settings.quality] || QUALITY.balanced).bloom,
   game: null,
   ui: null,
   leaveGame() {
@@ -37,12 +57,12 @@ window.ghostHunter = app; // handy for debugging in the console
 if (import.meta.env.DEV) window.THREE = THREE;
 const charsReady = app.characters.load();
 
-// idle backdrop when no round is running
-const idle = { scene: new THREE.Scene(), cam: new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 100) };
-idle.scene.background = new THREE.Color('#0b0a12');
+// menus render a slow view of the selected map behind them
+const backdrop = new MenuBackdrop(renderer);
+app.backdrop = backdrop;
 renderer.setAnimationLoop(() => {
   if (app.game && !app.game.disposed && app.game.composer) app.game.frame();
-  else renderer.render(idle.scene, idle.cam);
+  else backdrop.render();
 });
 addEventListener('resize', () => {
   if (!app.game) renderer.setSize(innerWidth, innerHeight, false);
@@ -76,12 +96,16 @@ net.on('hello', () => {
   const name = localStorage.getItem('gh.name');
   if (code && name && !app.ui.room) net.send({ t: 'join', code, name });
   else if (!app.ui.room) app.ui.showHome();
+  if (!backdrop.mapId) {
+    backdrop.show(['manor', 'farm', 'carnival'][Math.floor(Math.random() * 3)]).then((ok) => { if (!ok) backdrop.show('sandbox'); });
+  }
 });
 net.on('room', (m) => {
   const first = !app.ui.room;
   app.ui.room = m;
   if (first) app.ui.chat.push({ sys: true, text: `Joined room ${m.code}.` });
   if (!app.game && m.phase === 'lobby' && testState !== 'started') app.ui.showLobby(m);
+  backdrop.show(m.settings.map);
 });
 net.on('chat', (m) => app.ui.addChat(m));
 net.on('error', (m) => {

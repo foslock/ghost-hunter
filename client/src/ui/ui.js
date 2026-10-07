@@ -252,12 +252,24 @@ export class UI {
       <h2>Paused</h2><p class="muted" style="margin:0">The round keeps going.</p>
       <label class="field"><div class="row"><span>Mouse sensitivity</span><b id="sv">${sens.toFixed(2)}</b></div><input type="range" id="sens" min="0.2" max="3" step="0.05" value="${sens}" /></label>
       <label class="field"><div class="row"><span>Volume</span><b id="vv">${Math.round(vol * 100)}%</b></div><input type="range" id="vol" min="0" max="1" step="0.05" value="${vol}" /></label>
+      <label class="field"><div class="row"><span>Field of view</span><b id="fv">${game.camera.fov}°</b></div><input type="range" id="fov" min="60" max="100" step="1" value="${game.camera.fov}" /></label>
+      <label class="field"><div class="row"><span>Graphics</span></div>
+        <select id="quality" class="btn small">${['high', 'balanced', 'low'].map((q) => `<option value="${q}" ${this.app.settings.quality === q ? 'selected' : ''}>${q}</option>`).join('')}</select></label>
       <label class="field" style="flex-direction:row;align-items:center;gap:8px"><input type="checkbox" id="inv" ${game.input.invertY ? 'checked' : ''} /> Invert mouse Y</label>
       <button class="btn primary" id="resume">Resume</button>
       <button class="btn" id="quit">Leave room</button></div></div>`;
     const $ = (s) => this.root.querySelector(s);
     $('#sens').oninput = (e) => { game.input.sensitivity = +e.target.value; $('#sv').textContent = (+e.target.value).toFixed(2); localStorage.setItem('gh.sens', e.target.value); };
     $('#vol').oninput = (e) => { this.app.audio.setVolume(+e.target.value); $('#vv').textContent = `${Math.round(e.target.value * 100)}%`; localStorage.setItem('gh.vol', e.target.value); };
+    $('#fov').oninput = (e) => {
+      const v = +e.target.value;
+      game.camera.fov = v;
+      game.camera.updateProjectionMatrix();
+      this.app.settings.fov = v;
+      $('#fv').textContent = `${v}°`;
+      localStorage.setItem('gh.fov', v);
+    };
+    $('#quality').onchange = (e) => this.app.setQuality(e.target.value);
     $('#inv').onchange = (e) => { game.input.invertY = e.target.checked; localStorage.setItem('gh.invert', e.target.checked ? '1' : '0'); };
     $('#resume').onclick = () => { game.input.requestLock(); this.clear(); };
     $('#quit').onclick = () => { this.app.leaveGame(); this.app.net.send({ t: 'leave' }); this.showHome(); };

@@ -35,14 +35,14 @@ export function ghostMaterial(color = '#cdeeff') {
       varying vec3 vN; varying vec3 vV; varying float vH; varying vec3 vW;
       void main(){
         float fres = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.0);
-        vec3 ice = vec3(0.62, 0.88, 1.0);
+        vec3 ice = vec3(0.45, 0.72, 0.92);
         vec3 col = mix(uColor, vec3(1.0), fres * 0.6);
-        col = mix(col, ice + fres * 0.4, uFrozen);
+        col = mix(col, ice + fres * 0.25, uFrozen);
         float sh = 0.5 + 0.5 * sin(uTime * 14.0 + vW.y * 18.0 + vW.x * 6.0);
         float a = uOpacity * (0.32 + 0.68 * fres) * mix(1.0, 0.55 + 0.45 * sh, uShimmer);
         a *= smoothstep(0.0, 0.12, vH);
         a = mix(a, max(a, 0.82 * uOpacity), uFrozen);
-        gl_FragColor = vec4(col * (1.0 + uFrozen * 0.3), a);
+        gl_FragColor = vec4(col * (1.0 - uFrozen * 0.15), a);
       }`,
   });
 }
@@ -291,7 +291,7 @@ export class Avatar {
 
   makeIce() {
     const g = new THREE.Group();
-    const mat = new THREE.MeshStandardMaterial({ color: 0xbfe9ff, emissive: 0x4aa8d8, emissiveIntensity: 0.6, transparent: true, opacity: 0.8, roughness: 0.15, metalness: 0.1 });
+    const mat = new THREE.MeshStandardMaterial({ color: 0x6fb6d8, emissive: 0x2a6f98, emissiveIntensity: 0.35, transparent: true, opacity: 0.55, roughness: 0.25, metalness: 0.0, depthWrite: false });
     for (let i = 0; i < 9; i++) {
       const m = new THREE.Mesh(new THREE.OctahedronGeometry(0.12 + Math.random() * 0.12, 0), mat);
       const a = (i / 9) * Math.PI * 2;
@@ -351,7 +351,7 @@ export class Avatar {
       }
       if (f & PF.EXPOSED) op = 0.75;
       if (f & PF.PENALTY) op = 0.42;
-      if (f & PF.FROZEN) op = 0.95;
+      if (f & PF.FROZEN) op = 0.8;
       target *= op;
       this.alpha += (target - this.alpha) * Math.min(1, dt * 6);
       this.mat.uniforms.uOpacity.value = this.alpha;

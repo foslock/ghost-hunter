@@ -99,6 +99,17 @@ export class Room {
         if (Array.isArray(msg.p)) g.teleport(gp, msg.p, msg.yaw);
         if (msg.time) g.timeLeft = msg.time;
         if (msg.phase === 'play' && g.phase === PHASE.BLIND) g.phaseEnd = g.time;
+        if ('pauseBots' in msg) g.botsPaused = !!msg.pauseBots;
+        if (msg.near) { // stand 2.5 m in front of another player of the given role, facing them
+          const other = [...g.players.values()].find((o) => o.id !== gp.id && o.role === msg.near);
+          if (other) {
+            const a = other.yaw;
+            const p = [other.pos.x - Math.sin(a) * 2.5, other.pos.y, other.pos.z - Math.cos(a) * 2.5];
+            g.teleport(gp, p, a + Math.PI);
+          }
+        }
+        if (msg.expose) for (const o of g.ghosts) o.exposedUntil = g.time + 30;
+        if (msg.freeze) for (const o of g.ghosts) if (o.id !== gp.id) g.freeze(o, null);
         break;
       case 'settings': if (isHost && !g) this.applySettings(msg); break;
       case 'team': {
