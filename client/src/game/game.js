@@ -126,6 +126,9 @@ export class GameView {
         s.near = 1; s.far = 220;
         moon.shadow.bias = -0.0006;
         moon.shadow.normalBias = 0.04;
+        // the scenery is static: refresh the big shadow map a few times a second, not every frame
+        moon.shadow.autoUpdate = false;
+        moon.shadow.needsUpdate = true;
       }
       scene.add(moon, moon.target);
       this.moon = moon;
@@ -493,6 +496,11 @@ export class GameView {
     this.updateViewModel(t, dt);
     if (this.isGhost) this.updateTarget();
     this.updateHud(t);
+
+    if (this.moon && (this.shadowClock = (this.shadowClock || 0) + dt) > 0.12) {
+      this.shadowClock = 0;
+      this.moon.shadow.needsUpdate = true;
+    }
 
     // post
     const u = this.final.uniforms;

@@ -46,7 +46,12 @@ export class Bot {
     if (ev.p && ev.e !== 'channel') ev = { ...ev, p: fuzz(ev.p, ev.e === 'drip' ? 0.3 : 1.4) };
     if (ev.e === 'snap') this.noises.push({ p: ev.p, t, w: 3 });
     else if (ev.e === 'whistle') this.noises.push({ p: ev.p, t, w: 2 });
-    else if (ev.e === 'drip') this.noises.push({ p: ev.p, t, w: 4 });
+    else if (ev.e === 'drip') {
+      // drips are only noticed when they're close and in view
+      const e = this.game.eye(this.p);
+      const d = Math.hypot(ev.p[0] - e.x, ev.p[2] - e.z);
+      if (d < 16 && this.game.world.segmentClear(e.x, e.y, e.z, ev.p[0], ev.p[1] + 0.2, ev.p[2])) this.noises.push({ p: ev.p, t, w: 4 });
+    }
     else if (ev.e === 'channel') this.noises.push({ p: ev.p, t, w: 6 });
     else if (ev.e === 'manip') {
       const prop = this.game.props.get(ev.prop);

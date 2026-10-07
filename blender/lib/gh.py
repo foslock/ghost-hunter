@@ -700,7 +700,7 @@ class MapBuilder:
                     piece(s0, s1, bz0, bz1, mat_back if m is mat else m, t / 4, t / 2)
                 else:
                     piece(s0, s1, bz0, bz1, m)
-            # collider for the whole segment
+            # collider for the whole segment (window openings are sealed below)
             mid = (s0 + s1) / 2 * sign
             ln = s1 - s0
             if horizontal:
@@ -711,6 +711,22 @@ class MapBuilder:
                 th, td, tm = trim
                 for side in (-1, 1):
                     piece(s0, s1, 0, th, tm, side * (t / 2 + td / 2), td)
+        self.seal_windows(a, b, ops, h, t, z)
+
+    def seal_windows(self, a, b, openings, h, t, z=0.0):
+        """Invisible colliders across window openings (sill > 0) so nobody can climb out."""
+        ax, ay = a
+        bx, by = b
+        horizontal = abs(by - ay) < 1e-6
+        sign = 1 if (bx - ax if horizontal else by - ay) >= 0 else -1
+        for off, w, oh, sill in openings:
+            if sill <= 0:
+                continue
+            mid = off * sign
+            if horizontal:
+                self.collider((ax + mid - w / 2, ay - t / 2, z + sill), (ax + mid + w / 2, ay + t / 2, z + min(oh, h)))
+            else:
+                self.collider((ax - t / 2, ay + mid - w / 2, z + sill), (ax + t / 2, ay + mid + w / 2, z + min(oh, h)))
 
     def stairs(self, start, direction, width, steps, rise, run, mat, z=0.0, side_mat=None):
         """Straight stair: start is the centre of the bottom edge, direction 'N','S','E','W'."""
@@ -733,7 +749,10 @@ class MapBuilder:
             pid = f'{ptype}{n}'
         p = Prop(self, pid, ptype, label, pos, rz, params)
         if key and key in self.prop_cache:
-            self.prop_cache[key].clone_into(p)
+            cached = self.prop_cache[key]
+            cached.clone_into(p)
+            # keep the prefab's archetype defaults (axis, dir, sound...) unless overridden here
+            p.params = {**cached.params, **(params or {})}
         else:
             prefab(p, **kw)
             if key:
