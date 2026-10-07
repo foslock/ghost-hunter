@@ -206,8 +206,12 @@ export class GameView {
       this.nubs = makeGhostNubs(this.characters, this.roster.get(this.me)?.color || '#cdeeff');
       this.camera.add(this.nubs);
       this.heldRelic = this.characters.make('relic');
-      this.heldRelic.scale.setScalar(0.9);
-      this.heldRelic.position.set(0, -0.36, -0.55);
+      this.heldRelic.scale.setScalar(0.62);
+      this.heldRelic.position.set(0.17, -0.33, -0.6);
+      this.heldRelic.traverse((o) => {
+        if (!o.isMesh) return;
+        for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m.emissiveIntensity > 1) m.emissiveIntensity = 1.1;
+      });
       this.heldRelic.visible = false;
       this.camera.add(this.heldRelic);
     }
@@ -568,9 +572,9 @@ export class GameView {
     if (this.heldRelic) {
       this.heldRelic.visible = carriedByMe;
       if (carriedByMe) {
-        this.heldRelic.position.y = -0.36 + Math.sin(t * 2.2) * 0.012;
+        this.heldRelic.position.y = -0.33 + Math.sin(t * 2.2) * 0.012;
         this.heldRelic.rotation.y = t * 0.6;
-        if (Math.random() < dt * 4) this.effects.wisps(this.camera.localToWorld(new THREE.Vector3(0, -0.2, -0.55)), '#7fffd4', 1);
+        if (Math.random() < dt * 3) this.effects.wisps(this.camera.localToWorld(new THREE.Vector3(0.17, -0.2, -0.6)), '#7fffd4', 1);
       }
     }
     // hum: hunters hear a carried relic nearby; ghosts hear the relic itself
