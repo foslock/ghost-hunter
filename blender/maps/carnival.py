@@ -23,6 +23,74 @@ from lib import gh, prefabs as pf  # noqa: E402
 import carnival_props as cp  # noqa: E402
 from carnival_props import W, PI, TAU, cos, sin, bulb, seg_col  # noqa: E402
 
+import numpy as np  # noqa: E402
+
+# --- workaround (local to this map): gh.Geo.to_mesh box-projects UVs for every material, so smooth
+# meshes in flat (untextured) materials get split at UV seams on export, roughly doubling vertex
+# counts. Collapse those loops to one UV so the glTF exporter can share their vertices.
+_orig_to_mesh = gh.Geo.to_mesh
+
+
+def _to_mesh_flat_uv(self, name):
+    mesh = _orig_to_mesh(self, name)
+    flat = [i for i, mt in enumerate(mesh.materials)
+            if not any(n.type == 'TEX_IMAGE' for n in mt.node_tree.nodes)]
+    if flat and mesh.uv_layers:
+        nf = len(mesh.polygons)
+        midx = np.empty(nf, dtype=np.int32)
+        mesh.polygons.foreach_get('material_index', midx)
+        totals = np.empty(nf, dtype=np.int32)
+        mesh.polygons.foreach_get('loop_total', totals)
+        mask = np.isin(np.repeat(midx, totals), flat)
+        uv = np.empty(len(mesh.loops) * 2, dtype=np.float32)
+        mesh.uv_layers[0].data.foreach_get('uv', uv)
+        uv = uv.reshape(-1, 2)
+        uv[mask] = 0.5
+        mesh.uv_layers[0].data.foreach_set('uv', uv.ravel())
+        if len(flat) == len(mesh.materials):
+            mesh.uv_layers.remove(mesh.uv_layers[0])   # no textures at all: skip TEXCOORD_0 on export
+    return mesh
+
+
+def split_untextured_chunks():
+    """Split every static chunk into a textured and an untextured mesh so the latter can drop its UVs."""
+    textured = {name for name, mt in m.mats.items() if any(n.type == 'TEX_IMAGE' for n in mt.bmat.node_tree.nodes)}
+    for key, g in list(m.chunks.items()):
+        if g.empty():
+            continue
+        tg, fg = gh.Geo(owner=m), gh.Geo(owner=m)
+        maps = ({}, {})
+        for f, mt, sm in zip(g.F, g.FM, g.FS):
+            k = 0 if mt.name in textured else 1
+            dst, remap = (tg, fg)[k], maps[k]
+            nf = []
+            for i in f:
+                j = remap.get(i)
+                if j is None:
+                    j = remap[i] = len(dst.V)
+                    dst.V.append(g.V[i])
+                nf.append(j)
+            dst.F.append(tuple(nf))
+            dst.FM.append(mt)
+            dst.FS.append(sm)
+        m.chunks[key] = tg
+        m.chunks[key + ('u',)] = fg
+
+
+gh.Geo.to_mesh = _to_mesh_flat_uv
+
+# Bevelled boxes export ~4x the vertices of plain ones; on thin trims the bevel is invisible anyway.
+_orig_box = gh.Geo.box
+
+
+def _box_lean(self, c, s, mat, rz=0.0, bevel=0.0, rx=0.0, ry=0.0, col=False):
+    if bevel and min(s) < 0.15:
+        bevel = 0.0
+    return _orig_box(self, c, s, mat, rz=rz, bevel=bevel, rx=rx, ry=ry, col=col)
+
+
+gh.Geo.box = _box_lean
+
 m = gh.MapBuilder('carnival', 'Lanternfall Carnival', chunk=14.0, seed=11)
 P = cp.palette(m)
 EDGE = 35.6      # fence line
@@ -37,8 +105,8 @@ def col_box(c, s):
     m.collider((c[0] - s[0] / 2, c[1] - s[1] / 2, c[2] - s[2] / 2), (c[0] + s[0] / 2, c[1] + s[1] / 2, c[2] + s[2] / 2))
 
 
-def place(fn, kind, label, pos, rz=0.0, params=None, key=None, **kw):
-    return m.place(fn, kind, label, pos, rz=rz, params=params, key=key, P=P, **kw)
+def place(fn, ptype, label, pos, rz=0.0, params=None, key=None, **kw):
+    return m.place(fn, ptype, label, pos, rz=rz, params=params, key=key, P=P, **kw)
 
 
 def face_rz(fx, fy):
@@ -48,7 +116,7 @@ def face_rz(fx, fy):
 
 # ================================================================ ground, paths, boundary
 
-def jitter_rect(x0, y0, x1, y1, jit, seed, step=1.2):
+def jitter_rect(x0, y0, x1, y1, jit, seed, step=1.7):
     rng = random.Random(seed)
     corners = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
     pts = []
@@ -59,12 +127,12 @@ def jitter_rect(x0, y0, x1, y1, jit, seed, step=1.2):
         nx, ny = (b[1] - a[1]) / L, -(b[0] - a[0]) / L
         for k in range(n):
             t = k / n
-            j = rng.uniform(-jit, jit) if 0 < k else 0
+            j = rng.uniform(-jit, jit) * 0.6 if 0 < k else 0
             pts.append((a[0] + (b[0] - a[0]) * t + nx * j, a[1] + (b[1] - a[1]) * t + ny * j))
     return pts
 
 
-def jitter_circle(cx, cy, r, jit, seed, n=40, sy=1.0):
+def jitter_circle(cx, cy, r, jit, seed, n=36, sy=1.0):
     rng = random.Random(seed)
     return [(cx + cos(k * TAU / n) * (r + rng.uniform(-jit, jit)), cy + sin(k * TAU / n) * (r + rng.uniform(-jit, jit)) * sy)
             for k in range(n)]
@@ -87,6 +155,7 @@ def build_ground():
     # trodden dirt: plaza, avenue, midway, connectors, clearings
     dirt(jitter_circle(0, 0, 12.0, 0.6, 1, n=48), 0.024)
     dirt(jitter_rect(-4.2, -35.5, 4.2, -9.0, 0.5, 2), 0.012)
+    dirt(jitter_rect(-3.6, -52.0, 3.6, -35.4, 0.6, 22), 0.012)
     dirt(jitter_rect(15.8, -31.0, 25.2, 13.0, 0.5, 3), 0.014)
     dirt(jitter_rect(14.5, 12.0, 33.0, 24.2, 0.6, 4), 0.018)
     dirt(jitter_rect(8.5, -12.5, 17.0, -4.5, 0.5, 5), 0.016)
@@ -103,7 +172,7 @@ def build_ground():
     dirt(jitter_rect(6.0, 17.0, 16.0, 31.0, 0.7, 16), 0.01)
     for i, (x, y, r) in enumerate(((3.2, -18.0, 0.9), (-2.0, -26.0, 0.7), (6.5, 9.5, 1.1), (20.0, -9.0, 1.2), (21.5, 6.0, 0.8),
                                    (-21.0, 15.0, 0.9), (-9.0, -9.5, 1.0), (31.0, -6.0, 0.9), (12.0, 22.0, 0.8))):
-        cp.puddle(S(x, y), P, (x, y), r, seed=i, rz=i * 0.7)
+        cp.puddle(S(x, y), P, (x, y), r * 0.7, seed=i, rz=i * 0.7)
 
 
 def fence_run(a, b, rz_in, seed=0, posters=()):
@@ -121,16 +190,20 @@ def fence_run(a, b, rz_in, seed=0, posters=()):
         hh = 2.3 + (0.25 if i % 5 == 2 else 0.0)
         size = (ln - 0.06, 0.08, hh) if horiz else (0.08, ln - 0.06, hh)
         g.box((mid[0], mid[1], 0.05 + hh / 2), size, mat)
-        cap = (ln, 0.16, 0.08) if horiz else (0.16, ln, 0.08)
-        g.box((mid[0], mid[1], 2.4), cap, P.wood_dark, bevel=0.01)
-        g.box((p0[0], p0[1], 1.35), (0.18, 0.18, 2.7), P.wood_dark, bevel=0.02)
+        g.box((p0[0], p0[1], 1.35), (0.18, 0.18, 2.7), P.wood_dark)
         if i % 2 == 0:
             g.sphere((p0[0], p0[1], 2.78), 0.1, P.mustard, n=8)
         if i in posters:
-            off = 0.05
-            ox, oy = -sin(rz_in) * 0 + (0 if horiz else (off if rz_in > 0 else -off)), (off if (horiz and abs(rz_in) > 1) else (-off if horiz else 0))
-            cp.poster(g, P, (mid[0] + ox, mid[1] + oy, 0), rz_in, kind=rng.randint(0, 2), w=1.0, h=1.3, z=0.7)
-    S(*b).box((b[0], b[1], 1.35), (0.18, 0.18, 2.7), P.wood_dark, bevel=0.02)
+            ix, iy = sin(rz_in), -cos(rz_in)
+            cp.poster(g, P, (mid[0] + ix * 0.05, mid[1] + iy * 0.05, 0), rz_in, kind=rng.randint(0, 2), w=1.0, h=1.3, z=0.7)
+    S(*b).box((b[0], b[1], 1.35), (0.18, 0.18, 2.7), P.wood_dark)
+
+
+def fence_buntings():
+    y = -EDGE + 0.22
+    place(cp.bunting, 'cloth', 'Fence Bunting', (-16.0, y, 2.55), a=(-4.9, 0, 0.0), b=(4.9, 0, 0.0), sag=0.35, fw=0.26, fh=0.34)
+    place(cp.bunting, 'cloth', 'Fence Bunting', (20.9, y, 2.55), a=(-4.9, 0, 0.0), b=(4.9, 0, 0.0), sag=0.35, fw=0.26, fh=0.34,
+          mats=[P.canvas_cream, P.canvas_teal, P.canvas_red])
 
 
 def build_boundary():
@@ -142,8 +215,8 @@ def build_boundary():
     # tree line beyond the hoarding
     rng = random.Random(21)
     for side in range(4):
-        for k in range(13):
-            t = -42 + k * 7 + rng.uniform(-2, 2)
+        for k in range(10):
+            t = -42 + k * 9.3 + rng.uniform(-2.5, 2.5)
             d = rng.uniform(38.5, 45)
             x, y = [(t, d), (d, t), (t, -d), (-d, t)][side]
             if side == 2 and abs(x) < 9:
@@ -195,7 +268,7 @@ def build_gate():
         dots = cp.text_dots('LANTERNFALL', 0.13)
         parts = [p.geo('bulb0'), p.geo('bulb1')]
         for u, v, ci in dots:
-            c = (u, 0.0, v)
+            c = (-u, 0.0, v)   # read from inside the park (looking south)
             if (ci * 7 + int(u * 100)) % 37 == 0:
                 bulb(p.body, c, P.bulb_dead, 0.045)
             else:
@@ -208,18 +281,18 @@ def build_gate():
     place(cp.gate_leaf, 'hinge', 'Front Gate', (2.42, gy, 0), w=2.4, h=2.5, side=-1)
     lg = S(-1, gy)
     with lg.at((-2.42, gy, 0)):
-        tmp = gh.Prop(m, '_tmp', 'hinge', '', (0, 0, 0), 0, {})
-        cp.gate_leaf(tmp, P, w=2.4, h=2.5, side=1)
-        lg.stack[-1] = lg.M @ tmp.parts['pivot'].local
-        for v, f, mt, s in zip([None], [None], [None], [None]):
-            pass
-    lg.stack.pop() if False else None
-    S(-1, gy).add((tmp.parts['pivot'].geo.V, [tuple(f) for f in tmp.parts['pivot'].geo.F], tmp.parts['pivot'].geo.FS), P.iron)
+        cp.gate_leaf_geo(lg, P, w=2.4, h=2.5, side=1)
     col_box((0, gy, 1.3), (4.9, 0.3, 2.6))
     # ticket booth (east) and turnstiles (west)
     build_ticket_booth((7.4, -32.2))
-    for i, x in enumerate((-5.6, -7.2)):
-        place(cp.turnstile, 'spin', 'Turnstile', (x, -31.6, 0), rz=0, key='turnstile')
+    place(cp.turnstile, 'spin', 'Turnstile', (-5.55, -31.6, 0), rz=0)
+    gt0 = S(-7.2, -31.6)
+    gt0.box((-7.25, -31.6, 0.5), (0.25, 0.25, 1.0), P.red)
+    gt0.box((-7.25, -31.6, 1.02), (0.3, 0.3, 0.04), P.mustard)
+    gt0.collide((-7.25, -31.6, 0.5), (0.3, 0.3, 1.0))
+    for k in range(4):
+        a = k * TAU / 4 + 0.6
+        gt0.tube([(-7.25, -31.6, 1.11), (-7.25 + 0.6 * cos(a), -31.6 + 0.6 * sin(a), 1.11)], 0.024, P.brass, n=6)
     gt = S(-6.4, -31.6)
     for x in (-4.7, -6.4, -8.1):
         gt.box((x, -31.6, 0.5), (0.1, 1.6, 1.0), P.iron)
@@ -260,7 +333,10 @@ def build_ticket_booth(c):
         g.collide((0, 0, 1.2), (2.1, 2.1, 2.4))
     rz = face_rz(-1, 0)
     place(cp.service_bell, 'bell', 'Ticket Bell', W((c[0], c[1], 0), rz, (-0.2, -0.62, 0.975)), rz)
-    place(cp.shutter, 'hinge', 'Ticket Shutter', W((c[0], c[1], 0), rz, (0, -0.98, 2.36)), rz, w=0.95, h=0.75, mat=P.boards_red)
+    gt = S(*c)
+    with gt.at(W((c[0], c[1], 0), rz, (0, -0.98, 2.36)), rz, rx=-0.9):
+        gt.box((0, -0.025, -0.38), (0.95, 0.05, 0.75), P.boards_red)
+        gt.box((0, -0.055, -0.38), (0.8, 0.01, 0.6), P.mustard)
 
 
 # ================================================================ central plaza + carousel
@@ -384,8 +460,10 @@ def build_plaza():
 # ================================================================ south avenue (food carts)
 
 def build_avenue():
-    for (x, y, lit) in ((-4.4, -25.0, True), (4.4, -25.0, False), (-4.4, -14.5, False), (4.4, -14.5, True)):
-        place(cp.lantern_post, 'flame', 'Avenue Lantern', (x, y, 0), key='lantern_lit' if lit else 'lantern_dark', light=lit)
+    place(cp.lantern_post, 'flame', 'Avenue Lantern', (-4.4, -25.0, 0), key='lantern_lit', light=True)
+    place(cp.lantern_post, 'flame', 'Avenue Lantern', (4.4, -14.5, 0), key='lantern_dark', light=False)
+    for (x, y) in ((4.4, -25.0), (-4.4, -14.5)):
+        cp.lamp_static(S(x, y), P, (x, y, 0), h=3.0, lit=True)
     place(cp.bunting, 'cloth', 'Avenue Bunting', (0, -25.0, 3.2), a=(-4.4, 0, 0.1), b=(4.4, 0, 0.1), sag=0.7)
     place(cp.bulb_string, 'flicker', 'Avenue Festoon', (0, -14.5, 3.2), a=(-4.4, 0, 0.1), b=(4.4, 0, 0.1), sag=0.8, seed=3)
     place(cp.popcorn_cart, 'jolt', 'Popcorn Cart', (-6.4, -20.5, 0), rz=face_rz(1, 0))
@@ -398,7 +476,7 @@ def build_avenue():
         cp.popcorn_box(S(x, y), P, (x, y, 0.02), rz=i * 2.1, tipped=True)
     for i in range(10):
         rng = random.Random(i + 40)
-        S(-6, -20).blob((-6.4 + rng.uniform(-1.2, 1.2), -20.5 + rng.uniform(-1.5, 1.5), 0.025), 0.03, P.popcorn, seed=i, subdiv=0)
+        bulb(S(-6, -20), (-6.4 + rng.uniform(-1.2, 1.2), -20.5 + rng.uniform(-1.5, 1.5), 0.025), P.popcorn, 0.03)
     cp.bench(S(-6.8, -26), P, (-6.8, -27.5, 0), rz=face_rz(1, 0))
     cp.bench(S(6.8, -16), P, (6.6, -16.2, 0), rz=face_rz(-1, 0))
     cp.trash_barrel(S(-6, -24), P, (-6.2, -24.6, 0), mat=P.red)
@@ -430,11 +508,11 @@ def build_lion_cage(c=(9.0, -20.5), rz=PI / 2):
         for i in range(nbar_l):
             x = -hl + 0.2 + i * (2 * hl - 0.4) / (nbar_l - 1)
             for sy in (-1, 1):
-                g.cyl((x, sy * hw, 0.95), 0.022, 2.2, P.iron, n=5)
+                g.cyl((x, sy * hw, 0.95), 0.022, 2.2, P.iron, n=5, caps=False)
         for i in range(nbar_s):
             y = -hw + 0.2 + i * (2 * hw - 0.4) / (nbar_s - 1)
             for sx in (-1, 1):
-                g.cyl((sx * hl, y, 0.95), 0.022, 2.2, P.iron, n=5)
+                g.cyl((sx * hl, y, 0.95), 0.022, 2.2, P.iron, n=5, caps=False)
         for z in (1.0, 2.1):
             for sy in (-1, 1):
                 g.box((0, sy * hw, z), (2 * hl, 0.05, 0.04), P.iron)
@@ -472,8 +550,15 @@ def build_lion_cage(c=(9.0, -20.5), rz=PI / 2):
         m.penalty_spawn(W((c[0], c[1], 0), rz, (lx, ly, 0.96)))
     m.penalty['label'] = 'The Lion Cage'
     place(cp.padlock_chain, 'swing', 'Cage Padlock', W((c[0], c[1], 0), rz, (hl + 0.12, 0.35, 1.9)), rz + PI / 2)
-    place(cp.hanging_lantern, 'swing', 'Cage Lantern', W((c[0], c[1], 0), rz, (hl + 0.25, -hw - 0.25, 3.45)), rz,
-          drop=0.35, light=('#ffb35c', 1.0, 7.0))
+    place(cp.hanging_lantern, 'swing', 'Cage Lantern', W((c[0], c[1], 0), rz, (hl + 0.5, -1.3, 3.3)), rz, bracket=0.5,
+          drop=0.35)
+    # bare bulb inside the cage so whoever is locked in stays visible
+    gb = S(*c)
+    bc = W((c[0], c[1], 0), rz, (0.0, 0.0, 0.0))
+    gb.cyl((bc[0], bc[1], 2.95), 0.006, 0.5, P.black, n=3, caps=False)
+    gb.lathe((bc[0], bc[1], 2.86), [(0.02, 0), (0.03, 0.06), (0.025, 0.1)], P.brass, n=6)
+    bulb(gb, (bc[0], bc[1], 2.8), P.bulb, 0.06)
+    m.light((bc[0], bc[1], 2.7), '#ffc070', 1.3, 7.5)
     place(cp.tarp_sheet, 'cloth', 'Cage Tarp', W((c[0], c[1], 0), rz, (-hl - 0.14, 0, 3.4)), rz + PI / 2, w=2.4, h=1.5, mat=P.canvas_red)
     place(cp.tamer_stool, 'jolt', "Tamer's Stool", W((c[0], c[1], 0), rz, (1.0, -hw - 1.4, 0)), rz + 0.4)
     gs = S(*c)
@@ -566,6 +651,19 @@ def build_big_top(cx=-22.5, cy=-1.0):
                     pp = pts_b[j]
                     bulb(g, (pp[0], pp[1], pp[2] - 0.08), P.bulb if (j + k) % 7 else P.bulb_dead, 0.045)
         g.cyl((-L, 0, 7.8), 0.06, 2 * L, P.iron, n=6, ry=PI / 2)
+        # tightrope with pole platforms and rope ladders
+        g.cyl((-L, 0, 3.3), 0.012, 2 * L, P.rope, n=4, ry=PI / 2, caps=False)
+        for sx in (-1, 1):
+            g.box((sx * (L - 0.05), 0, 3.22), (0.9, 0.7, 0.06), P.planks)
+            g.box((sx * (L - 0.05), -0.36, 3.3), (0.9, 0.03, 0.12), P.mustard)
+            g.tube([(sx * (L + 0.35), 0.3, 3.2), (sx * L, 0.3, 2.7)], 0.025, P.iron, n=4)
+            g.tube([(sx * (L + 0.35), -0.3, 3.2), (sx * L, -0.3, 2.7)], 0.025, P.iron, n=4)
+            for side in (-0.18, 0.18):
+                g.tube([(sx * (L + 0.3), side, 3.2), (sx * (L + 0.45), side, 0.0)], 0.012, P.rope, n=3)
+            for k in range(10):
+                z = 0.3 + k * 0.29
+                xx = sx * (L + 0.3 + 0.15 * (1 - z / 3.2))
+                g.cyl((xx, -0.18, z), 0.015, 0.36, P.wood, n=4, rx=-PI / 2, caps=False)
         # ring
         Rr = 3.0
         for k in range(24):
@@ -575,7 +673,7 @@ def build_big_top(cx=-22.5, cy=-1.0):
             with g.at((cos(am) * Rr, sin(am) * Rr, 0), rz=am):
                 g.box((0, 0, 0.19), (0.32, ch, 0.38), P.red if k % 2 else P.cream)
                 g.box((0, 0, 0.395), (0.36, ch, 0.04), P.mustard)
-            seg_col(g, (cos(a0) * Rr, sin(a0) * Rr), (cos(a1) * Rr, sin(a1) * Rr), 0.3, 0.0, 0.4, step=0.8)
+            seg_col(g, (cos(a0) * Rr, sin(a0) * Rr), (cos(a1) * Rr, sin(a1) * Rr), 1.1, 0.0, 0.4, step=0.8)
         g.prism((0, 0, 0), [(cos(k * TAU / 32) * (Rr - 0.14), sin(k * TAU / 32) * (Rr - 0.14)) for k in range(32)], 0.045, P.dirt)
         # bleachers along the straight sides
         for sy in (-1, 1):
@@ -587,9 +685,15 @@ def build_big_top(cx=-22.5, cy=-1.0):
                 g.box((0, yc - sy * 0.1, top - 0.03), (6.7, 0.5, 0.06), P.planks, bevel=0.01)
                 g.box((0, yf + sy * 0.02, top - 0.12), (6.65, 0.03, 0.08), P.mustard)
                 g.collide((0, yc, top / 2), (6.6, 0.75, top))
-            for x in (-3.3, 3.3):
-                g.box((x, sy * 5.7, 0.7), (0.08, 2.3, 1.4), P.wood_dark)
-                g.tube([(x, sy * 4.6, 0.5), (x, sy * 6.8, 1.6)], 0.02, P.iron, n=4)
+            for x in (-3.32, 3.32):
+                for t in range(3):
+                    yy = sy * (4.6 + 0.75 * t + 0.1)
+                    g.cyl((x, yy, 0.4 * (t + 1)), 0.025, 0.85, P.iron, n=5, caps=False)
+                g.tube([(x, sy * 4.7, 1.25), (x, sy * 6.2, 2.05)], 0.03, P.brass, n=5)
+            for t in range(3):
+                yf = sy * (4.55 + 0.75 * t)
+                for k in range(9):
+                    g.box((-3.0 + k * 0.75, yf + sy * 0.05, 0.4 * t + 0.2), (0.05, 0.05, 0.36), P.wood_dark)
         # performers' end: wardrobe trunk, costume rack, ringmaster podium
         g.box((-8.0, 3.0, 0.35), (1.1, 0.6, 0.7), P.boards_indigo, bevel=0.03, col=True)
         g.box((-8.0, 3.0, 0.72), (1.14, 0.64, 0.06), P.mustard)
@@ -615,7 +719,7 @@ def build_big_top(cx=-22.5, cy=-1.0):
         g.box((ex + 0.99, 0, 4.2), (0.02, 3.4, 0.68), P.indigo)
         with g.at((ex + 1.01, 0, 0), rz=PI / 2):
             for u, v, ci in cp.text_dots('CIRCUS', 0.095):
-                bulb(g, (u, 0, 3.88 + v), P.bulb if (ci + int(v * 50)) % 9 else P.bulb_dead, 0.04)
+                bulb(g, (u, 0, 3.88 + v), P.bulb if (ci * 7 + int(u * 31) + int(v * 53)) % 17 else P.bulb_dead, 0.04)
     # lid / ceiling collider (tent interior)
     m.collider((cx - L - R, cy - R, eave), (cx + L + R, cy + R, eave + 0.3))
     # props inside
@@ -623,17 +727,20 @@ def build_big_top(cx=-22.5, cy=-1.0):
     for i, x in enumerate((-1.1, 1.1)):
         place(cp.trapeze, 'swing', 'Trapeze', T(x, 0, 4.8), rope=3.0, params={'amp': 0.05 + 0.02 * i, 'period': 3.4 + 0.5 * i})
     place(cp.spotlight, 'swing', 'Ring Spotlight', T(L - 0.5, 0.6, 6.6), rz=PI / 2)
-    place(cp.bunting, 'cloth', 'Ring Pennants', T(0, 0, 6.6), a=(-L + 0.2, 0, 0.3), b=(L - 0.2, 0, 0.3), sag=0.5,
-          mats=[P.canvas_mustard, P.canvas_red, P.canvas_cream])
+    g.tube([T(L, 0.0, 6.75), T(L - 0.5, 0.6, 6.62)], 0.03, P.iron, n=4)
+    g.tube([T(L, 0.0, 6.2), T(L - 0.35, 0.42, 6.6)], 0.02, P.iron, n=4)
+
     place(cp.gong, 'bell', 'Ringmaster Gong', T(6.9, 3.0), rz=face_rz(-1, -0.3))
-    place(cp.ring_pedestal, 'spin', 'Ring Pedestal', T(-1.9, 1.7))
+    place(cp.ring_pedestal, 'spin', 'Ring Pedestal', T(-1.7, 1.5))
     place(cp.fire_hoop, 'flame', 'Fire Hoop', T(1.9, -1.9), rz=0.6)
     place(cp.cannon, 'rock', 'Cannonball Cannon', T(-7.4, 0.2), rz=0.0)
-    place(cp.big_ball, 'jolt', 'Balance Ball', T(-4.4, 3.9))
+    ball_wedges_static = cp.ball_wedges
+    ball_wedges_static(g, T(-4.4, 3.9, 0.55), 0.55, [P.red, P.cream, P.teal, P.cream], n=8)
+    g.collide(T(-4.4, 3.9, 0.55), (1.0, 1.0, 1.1))
     place(cp.show_clock, 'clock', 'Next Show Clock', (cx + L + R + 1.9, cy + 3.0, 0), rz=face_rz(1, 0.2), title='NEXT SHOW')
-    cp.wedge_drum(g, T(2.0, 1.5, 0), 0.4, 0.32, 0.55, [P.teal, P.cream], n=10)
-    g.cyl(T(2.0, 1.5, 0.55), 0.35, 0.05, P.mustard, n=12)
-    g.collide(T(2.0, 1.5, 0.3), (0.8, 0.8, 0.6))
+    cp.wedge_drum(g, T(1.8, 1.4, 0), 0.4, 0.32, 0.55, [P.teal, P.cream], n=10)
+    g.cyl(T(1.8, 1.4, 0.55), 0.35, 0.05, P.mustard, n=12)
+    g.collide(T(1.8, 1.4, 0.3), (0.8, 0.8, 0.6))
     for (x, y) in ((L + R + 0.15, 0.0), (-L - R - 0.15, 0.0)):
         door_flaps((cx + x, cy + y), x > 0)
     m.light(T(5.6, 0.0, 3.4), '#ffbf75', 1.1, 10.0)
@@ -726,7 +833,7 @@ def build_ferris(wx=-2.0, wy=29.5):
         # bottom gondola collider (it hangs at the deck)
         g.collide((0, 0, 1.0), (1.45, 1.05, 0.7))
         # operator booth
-        bx, by_ = 5.2, -3.2
+        bx, by_ = 5.4, -6.1
         g.box((bx, by_, 0.1), (1.8, 1.8, 0.2), P.planks)
         g.box((bx, by_ + 0.85, 1.25), (1.8, 0.1, 2.5), P.boards_teal)
         g.box((bx + 0.85, by_, 1.25), (0.1, 1.8, 2.5), P.boards_teal)
@@ -759,12 +866,13 @@ def build_ferris(wx=-2.0, wy=29.5):
     place(cp.wheel_lights, 'flicker', 'Ferris Wheel Rim Lights', (wx, wy, AZ), R=R, half=half, n=72,
           light=((0, -4.0, -AZ + 2.6), '#ffb45c', 1.6, 11.0), seed=1)
     place(cp.wheel_lights, 'flicker', 'Ferris Wheel Spoke Lights', (wx, wy, AZ), R=R, half=half, n=8, spokes=True, seed=2)
-    place(cp.lever, 'hinge', 'Brake Lever', (wx + 4.7, wy - 3.75, 0.2), rz=PI / 2)
+    place(cp.lever, 'hinge', 'Brake Lever', (wx + 2.7, wy - 4.3, 0.4), rz=PI / 2)
 
 
 # ================================================================ midway (east)
 
-def booth_shell(g, w, d, h=2.7, wall=None, trim=None, aw=None, sign=True, seed=0, awning=1.3, posts=True):
+def booth_shell(g, w, d, h=2.7, wall=None, trim=None, aw=None, sign=True, seed=0, awning=1.3, posts=True, title=None, ink=None,
+                back_posters=True):
     """Game booth, front facing local -Y. Interior floor y in [-d/2+0.6, d/2-0.15]."""
     wall = wall or P.boards_red
     trim = trim or P.mustard
@@ -780,11 +888,6 @@ def booth_shell(g, w, d, h=2.7, wall=None, trim=None, aw=None, sign=True, seed=0
     g.box((0, -hd + 0.28, 0.5), (w - 0.2, 0.5, 1.0), wall)
     g.box((0, -hd + 0.02, 0.5), (w - 0.3, 0.02, 0.7), trim)
     g.box((0, -hd + 0.01, 0.5), (w - 0.5, 0.02, 0.56), P.indigo)
-    for k in range(int(w / 0.6)):
-        x = -hw + 0.45 + k * 0.6
-        if x > hw - 0.3:
-            break
-        g.cyl((x, -hd - 0.0, 0.5), 0.1, 0.02, trim, n=10, rx=PI / 2)
     g.box((0, -hd + 0.2, 1.03), (w - 0.1, 0.66, 0.06), P.wood, bevel=0.01)
     g.box((0, -hd + 0.06, 2.45 + (h - 2.45) / 2), (w, 0.12, h - 2.45), wall)
     # shelves on the back wall
@@ -793,18 +896,19 @@ def booth_shell(g, w, d, h=2.7, wall=None, trim=None, aw=None, sign=True, seed=0
     for z in (1.45, 1.95):
         x = -hw + 0.35
         while x < hw - 0.3:
-            kind = rng.random()
+            kind = rng.random() if z > 1.5 else 0.9
             col = rng.choice([P.fur, P.pink, P.teal, P.mustard, P.cream, P.red])
             if kind < 0.6:
                 s = rng.uniform(0.11, 0.16)
-                g.sphere((x, hd - 0.3, z + 0.02 + s), s, col, n=8)
-                g.sphere((x, hd - 0.33, z + 0.02 + s * 2.6), s * 0.7, col, n=8)
-                g.sphere((x - s * 0.5, hd - 0.33, z + 0.02 + s * 3.1), s * 0.25, col, n=6)
-                g.sphere((x + s * 0.5, hd - 0.33, z + 0.02 + s * 3.1), s * 0.25, col, n=6)
+                g.sphere((x, hd - 0.3, z + 0.02 + s), s, col, n=6)
+                g.sphere((x, hd - 0.33, z + 0.02 + s * 2.6), s * 0.7, col, n=6)
+                bulb(g, (x - s * 0.5, hd - 0.33, z + 0.02 + s * 3.1), col, round(s * 0.25, 3))
+                bulb(g, (x + s * 0.5, hd - 0.33, z + 0.02 + s * 3.1), col, round(s * 0.25, 3))
                 x += s * 2 + 0.08
             else:
-                g.box((x, hd - 0.3, z + 0.14), (0.16, 0.16, 0.24), col, bevel=0.02, rz=rng.uniform(-0.3, 0.3))
-                x += 0.24
+                bw = rng.uniform(0.22, 0.4)
+                g.box((x + bw / 2, hd - 0.3, z + 0.14), (bw, 0.22, rng.uniform(0.16, 0.3)), col, rz=rng.uniform(-0.15, 0.15))
+                x += bw + 0.1
     # awning: alternating strips
     n = max(4, int(round(w / 0.5)))
     sw = w / n
@@ -832,6 +936,18 @@ def booth_shell(g, w, d, h=2.7, wall=None, trim=None, aw=None, sign=True, seed=0
             t = k / 11
             x = -hw + 0.3 + (w - 0.6) * t
             bulb(g, (x, -hd - 0.0, h + 0.05), P.bulb if rng.random() > 0.12 else P.bulb_dead, 0.04)
+        if title:
+            pitch = min(0.068, 0.82 * (w - 0.6) / (6 * len(title) - 1))
+            cp.painted_letters(g, title, (0, -hd + 0.02, h + 0.42 - 3 * pitch), pitch, ink or P.cream)
+    # bulbs under the awning edge
+    ez = h - 0.05 - drop - 0.07
+    for k in range(int(w / 0.55)):
+        x = -hw + 0.3 + k * 0.55
+        bulb(g, (x, -hd - awning + 0.06, ez), P.bulb if rng.random() > 0.15 else P.bulb_dead, 0.038)
+    if back_posters:
+        for k in range(1 + int(w > 4.8)):
+            cp.poster(g, P, (-w * 0.22 + k * w * 0.44 if w > 4.8 else rng.uniform(-0.6, 0.6), hd + 0.02, 0), PI,
+                      w=0.9, h=1.2, kind=seed + k, z=0.75)
     g.collide((0, 0, h / 2 + 0.06), (w, d, h + 0.12))
 
 
@@ -844,43 +960,39 @@ def build_midway():
     wrz, erz = face_rz(1, 0), face_rz(-1, 0)
     d = 3.4
     booths = [
-        ('knock', (14.8, -23.5), wrz, 5.0, P.boards_teal, P.mustard, [P.canvas_teal, P.canvas_cream]),
-        ('ring', (14.8, -14.5), wrz, 5.0, P.boards_red, P.mustard, [P.canvas_red, P.canvas_cream]),
-        ('prize', (14.8, -2.3), wrz, 5.0, P.boards_indigo, P.mustard, [P.canvas_mustard, P.canvas_red]),
-        ('darts', (14.8, 7.0), wrz, 4.6, P.boards_cream, P.red, [P.canvas_red, P.canvas_cream]),
-        ('gallery', (26.2, -11.5), erz, 7.0, P.boards_indigo, P.mustard, [P.canvas_red, P.canvas_mustard]),
-        ('fish', (26.2, -0.6), erz, 4.6, P.boards_teal, P.cream, [P.canvas_teal, P.canvas_cream]),
-        ('prize2', (26.2, 8.6), erz, 5.0, P.boards_red, P.mustard, [P.canvas_cream, P.canvas_red]),
+        ('knock', (14.8, -23.5), wrz, 5.0, P.boards_teal, P.mustard, [P.canvas_teal, P.canvas_cream], 'KNOCK EM DOWN', P.mustard),
+        ('ring', (14.8, -14.5), wrz, 5.0, P.boards_red, P.mustard, [P.canvas_red, P.canvas_cream], 'RING TOSS', P.cream),
+        ('prize', (14.8, -2.3), wrz, 5.0, P.boards_indigo, P.mustard, [P.canvas_mustard, P.canvas_red], 'PRIZES', P.mustard),
+        ('darts', (14.8, 7.0), wrz, 4.6, P.boards_cream, P.red, [P.canvas_red, P.canvas_cream], 'DARTS', P.red),
+        ('gallery', (26.2, -11.5), erz, 7.0, P.boards_indigo, P.mustard, [P.canvas_red, P.canvas_mustard], 'SHOOTING GALLERY', P.cream),
+        ('fish', (26.2, -0.6), erz, 4.6, P.boards_teal, P.cream, [P.canvas_teal, P.canvas_cream], 'GOLDFISH', P.mustard),
+        ('prize2', (26.2, 8.6), erz, 5.0, P.boards_red, P.mustard, [P.canvas_cream, P.canvas_red], 'EVERY ONE WINS', P.cream),
     ]
-    for i, (kind, c, rz, w, wall, trim, aw) in enumerate(booths):
+    for i, (kind, c, rz, w, wall, trim, aw, title, ink) in enumerate(booths):
         g = S(*c)
         with g.at((c[0], c[1], 0), rz):
-            booth_shell(g, w, d, wall=wall, trim=trim, aw=aw, seed=i)
+            booth_shell(g, w, d, wall=wall, trim=trim, aw=aw, seed=i, title=title, ink=ink)
             booth_contents(g, kind, w, d)
         F = booth_frame((c[0], c[1], 0), rz)
         hd = d / 2
-        if kind in ('ring', 'prize', 'gallery', 'darts', 'prize2', 'knock', 'fish'):
+        if kind in ('ring', 'prize', 'gallery', 'prize2'):
             place(cp.valance, 'cloth', 'Awning Valance', F(0, -hd - 1.3 + 0.02, 2.2), rz, w=w, mats=aw[::-1],
                   params={'amp': 0.02 + 0.01 * (i % 3)})
         booth_props(kind, F, rz, w, d)
     # bulb festoons and bunting across the lane
-    lights = {-14.0: ('#ffb45c', 1.3, 9.0), -1.5: ('#ffb45c', 1.3, 9.0), 8.0: ('#ffb45c', 1.2, 9.0)}
-    for y in (-23.0, -14.0, -1.5, 8.0):
-        L = lights.get(y)
+    for y in (-23.0, -9.0, 8.0):
         place(cp.bulb_string, 'flicker', 'Midway Festoon', (20.5, y, 3.3), a=(-4.0, 0, 0.1), b=(4.0, 0, 0.1), sag=0.75, seed=int(y),
-              light=((0, 0, -0.9), L[0], L[1], L[2]) if L else None, red_every=4)
-    place(cp.bunting, 'cloth', 'Midway Bunting', (20.5, -18.5, 3.3), a=(-4.0, -1.5, 0.1), b=(4.0, 1.5, 0.1), sag=0.8)
-    place(cp.bunting, 'cloth', 'Midway Bunting', (20.5, 3.2, 3.3), a=(-4.0, 1.3, 0.1), b=(4.0, -1.3, 0.1), sag=0.8,
-          mats=[P.canvas_teal, P.canvas_cream, P.canvas_mustard])
-    for y in (-19.0, -5.8, 3.8, 12.0):
-        for x in (16.2, 24.8):
-            pass
+              light=((0, 0, -0.9), '#ffb45c', 1.3, 9.0), red_every=4)
+    place(cp.bunting, 'cloth', 'Midway Bunting', (20.5, -14.25, 3.3), a=(-4.0, -1.25, 0.1), b=(4.0, 1.25, 0.1), sag=0.8)
+
     # festoon poles where there is no booth to tie to
-    gp = S(20, -24)
-    for (x, y) in ((24.6, -23.0), (24.6, 8.0 - 0.0), (16.4, 8.0)):
-        pass
-    gp.cyl((24.6, -23.0, 0), 0.07, 3.5, P.wood_dark, n=6)
-    gp.collide((24.6, -23.0, 1.75), (0.2, 0.2, 3.5))
+    for (x, y) in ((24.6, -23.0), (16.4, -9.0)):
+        gp = S(x, y)
+        gp.cyl((x, y, 0), 0.07, 3.5, P.wood_dark, n=6)
+        gp.sphere((x, y, 3.52), 0.08, P.mustard, n=8)
+        gp.collide((x, y, 1.75), (0.2, 0.2, 3.5))
+    build_cutout_board((21.2, -5.4), face_rz(0.15, -1))
+    build_kiosk((20.3, -18.6))
     # weight-guessing stand (east row, south)
     build_weight_stand((25.8, -24.0))
     build_high_striker((20.5, 16.5))
@@ -893,6 +1005,55 @@ def build_midway():
     cp.trash_barrel(S(17.4, -9), P, (17.4, -9.2, 0), mat=P.red)
     cp.trash_barrel(S(23.8, 4), P, (23.7, 4.0, 0), mat=P.teal)
     cp.bench(S(17.3, 1.4), P, (17.2, 1.6, 0), rz=face_rz(1, 0))
+
+
+def build_cutout_board(c, rz):
+    """Face-in-the-hole photo board: a strongman and a bearded lady (static cover in the lane)."""
+    g = S(*c)
+    with g.at((c[0], c[1], 0), rz):
+        for sx in (-1.0, 1.0):
+            g.box((sx * 1.1, 0.12, 1.0), (0.1, 0.1, 2.0), P.wood_dark)
+            g.box((sx * 1.1, 0.3, 0.05), (0.1, 0.7, 0.1), P.wood_dark)
+        poly = [(-1.3, 0.25), (1.3, 0.25), (1.3, 2.1), (0.7, 2.35), (0.0, 2.2), (-0.7, 2.35), (-1.3, 2.1)]
+        g.prism((0, 0.06, 0), poly, 0.06, P.boards_cream, rx=PI / 2)
+        for sx, body, trim in ((-0.62, P.red, P.cream), (0.62, P.teal, P.mustard)):
+            g.box((sx, -0.01, 1.05), (0.9, 0.01, 1.3), body)
+            for k in range(4):
+                g.box((sx, -0.015, 0.55 + k * 0.32), (0.9, 0.01, 0.1), trim)
+            g.cyl((sx, 0.08, 1.85), 0.15, 0.2, P.black, n=12, rx=PI / 2)
+            g.cyl((sx, -0.012, 1.85), 0.19, 0.01, P.cream, n=14, rx=PI / 2)
+        g.sphere((-0.62, -0.02, 1.4), 1.0, P.red, n=8, s=(0.5, 0.02, 0.18))
+        g.box((0.62, -0.02, 1.55), (0.3, 0.01, 0.35), P.wood_dark)
+        cp.painted_letters(g, 'SAY CHEESE', (0, -0.02, 0.32), 0.022, P.indigo)
+        g.collide((0, 0.06, 1.15), (2.6, 0.3, 2.3))
+
+
+def build_kiosk(c, roof=None, body=None, label=None):
+    """Round kiosk with a striped dome (lemonade in the midway, ride tickets by the wheel)."""
+    roof = roof or [P.canvas_cream, P.canvas_mustard]
+    g = S(*c)
+    with g.at((c[0], c[1], 0)):
+        g.lathe((0, 0, 0), [(0.95, 0), (0.95, 1.05)], body or P.boards_cream, n=10, smooth=False)
+        g.lathe((0, 0, 1.05), [(1.05, 0), (1.05, 0.06)], P.red, n=10, smooth=False)
+        for k in range(5):
+            a = k * TAU / 5
+            g.cyl((cos(a) * 0.9, sin(a) * 0.9, 1.1), 0.04, 1.3, P.mustard, n=6)
+        g.cyl((0, 0, 1.1), 0.5, 0.5, P.glass, n=10)
+        g.cyl((0, 0, 1.12), 0.46, 0.35, P.mustard, n=10)
+        cp.wedge_cone(g, (0, 0, 2.4), 1.35, 0.0, 0.05, 0.7, roof, n=10, rows=2, sag=-0.05)
+        if label:
+            g.box((0, -0.97, 0.62), (1.0, 0.04, 0.32), P.indigo)
+            cp.painted_letters(g, label, (0, -1.0, 0.53), 0.02, P.mustard)
+        g.sphere((0, 0, 3.15), 0.09, P.red, n=8)
+        for k in range(10):
+            a = (k + 0.5) * TAU / 10
+            g.add(cp.prim_pennant(0.75, 0.22, 3, 3, 'scallop'), P.canvas_red if k % 2 else P.canvas_cream,
+                  gh.X((cos(a) * 1.33, sin(a) * 1.33, 2.4), rz=a + PI / 2))
+            bulb(g, (cos(a) * 1.2, sin(a) * 1.2, 2.32), P.bulb if k % 4 else P.bulb_dead, 0.035)
+        for k in range(5):
+            a = k * 1.1
+            g.lathe((cos(a) * 0.3, sin(a) * 0.3, 1.47), [(0.035, 0), (0.04, 0.12)], P.cream, n=6, cap_top=False)
+        g.collide((0, 0, 1.2), (1.9, 1.9, 2.4))
 
 
 def booth_contents(g, kind, w, d):
@@ -927,14 +1088,14 @@ def booth_contents(g, kind, w, d):
         for t in range(2):
             g.box((0, 0.6 - t * 0.5, 0.35 + t * 0.2), (w - 0.5, 0.45, 0.7 + t * 0.4), P.wood)
         rng = random.Random(len(kind))
-        for t in range(2):
+        for t in range(1):
             x = -hw + 0.5
             while x < hw - 0.5:
                 s = rng.uniform(0.18, 0.26)
                 col = rng.choice([P.fur, P.pink, P.teal, P.cream])
                 with g.at((x, 0.55 - t * 0.5, 0.7 + t * 0.4 + 0.0)):
-                    cp.bear(g, P, s * 1.6, col, P.cream, rng.choice([P.red, P.teal, P.mustard]))
-                x += s * 1.6 + 0.12
+                    cp.bear(g, P, s * 1.6, col, P.cream, lo=True)
+                x += s * 1.6 + 0.2
     elif kind == 'darts':
         g.box((0, hd - 0.2, 1.75), (w - 0.5, 0.06, 1.4), P.wood)
         rng = random.Random(9)
@@ -967,7 +1128,7 @@ def booth_contents(g, kind, w, d):
             x, z = rng.uniform(-hw + 0.4, hw - 0.4), rng.uniform(1.0, 2.5)
             g.prism((x, hd - 0.18, z), [(0, 0.06), (-0.05, -0.04), (0.05, -0.04)], 0.01, P.cream, rx=PI / 2)
         g.box((0, 0.7, 0.55), (w - 0.4, 0.3, 1.1), P.boards_teal)
-        g.box((0, 1.1, 0.8), (w - 0.4, 0.3, 1.6), P.boards_teal)
+        g.box((0, 1.22, 0.8), (w - 0.4, 0.56, 1.6), P.boards_teal)
         for i in range(5):
             x = -0.9 + i * 0.45
             g.cyl((x, -hd + 0.4, 1.08), 0.02, 0.85, P.iron, n=6, ry=PI / 2 - 0.05, rz=0.3)
@@ -980,23 +1141,19 @@ def booth_props(kind, F, rz, w, d):
     if kind == 'knock':
         place(cp.bottle_pyramid, 'jolt', 'Milk Bottle Pyramid', F(0.0, 0.3, 0.0), rz)
     elif kind == 'ring':
-        place(cp.hanging_plush, 'swing', 'Hanging Teddy', F(1.6, -hd - 1.15, 2.2), rz, s=0.5, fur=P.teal)
+        pass
     elif kind == 'prize':
         place(cp.plush, 'jolt', 'Giant Bear', F(1.85, -hd + 0.3, 1.06), rz, kind='bear', s=0.75, fur=P.pink)
-        place(cp.plush, 'jolt', 'Prize Bunny', F(-1.9, -hd + 0.35, 1.06), rz + 0.4, kind='bunny', s=0.55)
         place(cp.hanging_plush, 'swing', 'Hanging Teddy', F(-0.9, -hd - 1.15, 2.2), rz, s=0.55)
     elif kind == 'prize2':
         place(cp.plush, 'jolt', 'Giant Bear', F(-1.9, -hd + 0.3, 1.06), rz - 0.3, kind='bear', s=0.7, fur=P.fur)
-        place(cp.hanging_plush, 'swing', 'Hanging Teddy', F(1.4, -hd - 1.15, 2.2), rz, s=0.5, fur=P.cream)
-    elif kind == 'darts':
-        place(cp.balloons, 'bob', 'Prize Balloons', F(1.6, -hd + 0.25, 1.06), rz, n=4, seed=7, h=1.0, post=False, amp=0.04)
-    elif kind == 'fish':
-        place(cp.hanging_lantern, 'swing', 'Booth Lantern', F(0.0, -hd - 0.4, 2.55), rz, drop=0.3)
+
+
     elif kind == 'gallery':
         place(cp.duck_row, 'bob', 'Duck Row', F(0, 0.7, 1.1), rz, length=w - 0.8, n=10)
-        place(cp.duck_row, 'bob', 'Duck Row', F(0, 1.1, 1.6), rz, length=w - 0.8, n=9, params={'amp': 0.018})
-        for i, x in enumerate((-2.2, 0.0, 2.2)):
-            place(cp.target_spinner, 'spin', 'Tin Target', F(x, 1.3, 1.95), rz, post=0.3, key='spinner')
+        place(cp.duck_row, 'bob', 'Duck Row', F(0, 1.05, 1.6), rz, length=w - 0.8, n=9, params={'amp': 0.018})
+        for i, x in enumerate((-1.6, 1.6)):
+            place(cp.target_spinner, 'spin', 'Tin Target', F(x, 1.38, 1.6), rz, post=0.62, key='spinner')
         place(cp.shutter, 'hinge', 'Gallery Shutter', F(-w / 2 + 0.95, -hd + 0.02, 2.4), rz, w=1.6, h=0.9, mat=P.boards_indigo)
 
 
@@ -1076,12 +1233,12 @@ def build_funhouse():
     H, ceil = 4.2, 3.4
     cx, cy = 24.0, 28.5
     g = S(cx, cy)
-    g.box((cx, cy, 0.01), (x1 - x0, y1 - y0, 0.02), P.planks, col=False)
+    g.box((cx, cy, 0.01), (x1 - x0, y1 - y0, 0.02), P.checker, col=False)
     ext, inn = P.boards_red, P.boards_indigo
     m.wall((x0, y0), (x1, y0), ext, h=H, openings=[(7.0, 2.4, 2.6, 0)], mat_back=inn)
     m.wall((x0, y1), (x1, y1), inn, h=H, mat_back=ext)
     m.wall((x0, y0), (x0, y1), inn, h=H, openings=[(6.75, 2.0, 2.5, 0)], mat_back=ext)
-    m.wall((x1, y0), (x1, y1), ext, h=H, openings=[(2.4, 2.0, 2.5, 0)], mat_back=inn)
+    m.wall((x1, y0), (x1, y1), ext, h=H, openings=[(2.4, 1.5, 2.4, 0)], mat_back=inn)
     m.wall((x0, 28.5), (x1, 28.5), inn, h=ceil, t=0.2, openings=[(5.5, 2.0, 2.5, 0), (11.5, 2.0, 2.5, 0)])
     m.wall((24.0, 28.5), (24.0, y1), inn, h=ceil, t=0.2, openings=[(2.5, 2.0, 2.5, 0)])
     g.box((cx, cy, ceil + 0.06), (x1 - x0, y1 - y0, 0.12), P.wood_dark, col=False)
@@ -1120,7 +1277,11 @@ def build_funhouse():
             a = PI / 2 + sx * (0.5 + k * 0.28)
             g.blob((cx + cos(a) * 3.1, fy - 0.15, hz + sin(a) * 2.8 - 0.4), 0.55, P.teal if k % 2 else P.red, seed=k + (sx > 0) * 9,
                    jitter=0.3, s=(1, 0.5, 1))
-    g.add(gh.prim_torus(1.3, 0.12, 20, 6, True, arc=PI), P.red, gh.X((cx, fy - 0.33, hz - 1.15), rx=PI / 2))
+    smile = [(cos(PI + PI * i / 14) * 1.6, sin(PI + PI * i / 14) * 1.0) for i in range(15)]
+    g.prism((cx, fy - 0.3, hz - 1.08), smile, 0.015, P.red, rx=PI / 2)
+    for i in range(6):
+        x = -0.7 + i * 0.28
+        g.box((cx + x, fy - 0.335, hz - 1.17), (0.2, 0.03, 0.17), P.cream)
     cp.wedge_cone(g, (cx, fy - 0.1, hz + 2.75), 1.3, 0.0, 0.03, 1.7, [P.canvas_mustard, P.canvas_red], n=10, rows=1)
     g.sphere((cx, fy - 0.1, hz + 4.5), 0.25, P.cream, n=10)
     for k in range(14):
@@ -1129,14 +1290,16 @@ def build_funhouse():
               gh.X((cx + cos(a) * 3.1, fy - 0.3, hz + sin(a) * 2.3 - 0.4), rz=a + PI / 2))
     for k in range(9):
         ang = PI * k / 8
-        bx, bz = cx + cos(ang) * 1.55, 1.3 + sin(ang) * 1.5
+        bx, bz = cx + cos(ang) * 1.55, 1.15 + sin(ang) * 1.45
         g.box((bx, fy - 0.2, bz), (0.28, 0.25, 0.28), P.red if k % 2 else P.cream, bevel=0.02, rz=0)
         bulb(g, (bx, fy - 0.35, bz), P.bulb, 0.045)
     for sx in (-1, 1):
-        g.box((cx + sx * 1.55, fy - 0.2, 0.65), (0.3, 0.3, 1.3), P.red, bevel=0.02)
+        g.box((cx + sx * 1.55, fy - 0.2, 0.58), (0.3, 0.3, 1.16), P.red, bevel=0.02)
     for k in range(10):
         bulb(g, (cx - 5.2 + k * 1.15, fy - 0.12, 7.1), P.bulb if k % 3 else P.bulb_red, 0.05)
-    cp.painted_letters(g, 'FUNHOUSE', (cx, fy - 0.07, 4.35), 0.075, P.mustard)
+    g.box((cx, fy - 0.38, 3.08), (3.3, 0.06, 0.52), P.mustard)
+    g.box((cx, fy - 0.42, 3.08), (3.15, 0.03, 0.42), P.indigo)
+    cp.painted_letters(g, 'FUNHOUSE', (cx, fy - 0.445, 2.93), 0.05, P.mustard)
     # props on the facade
     for sx in (-1, 1):
         place(cp.clown_eye, 'spin', 'Clown Eye', (cx + sx * 1.05, fy - 0.33, hz + 0.75), params={'speed': 0.6 * sx}, key='clown_eye')
@@ -1144,7 +1307,7 @@ def build_funhouse():
     place(cp.clown_jaw, 'hinge', 'Clown Jaw', (cx, fy - 0.3, hz - 1.15), w=2.4)
     # --- interior: mirror hall (south), clown room (NE), barrel room (NW)
     mirror_panel(g, (24.0, 26.7), True, 2.2)
-    mirror_panel(g, (20.2, 25.6), False, 1.9)
+    mirror_panel(g, (21.0, 25.6), False, 1.9)
     mirror_panel(g, (27.9, 25.5), False, 1.8)
     for (x, y, along_x) in ((18.6, 24.2, True), (21.8, 24.2, True), (26.2, 24.2, True), (29.4, 24.2, True),
                             (17.2, 26.3, False), (30.8, 25.0, False), (25.6, 28.35, True), (19.0, 28.35, True)):
@@ -1156,8 +1319,9 @@ def build_funhouse():
     g.box((19.05, 30.75 + 1.52, 0.4), (3.7, 0.1, 0.8), P.wood_dark)
     place(cp.jack_in_box, 'bob', 'Jack-in-the-Box', (29.6, 31.6, 0), rz=face_rz(-1, -1))
     place(mirror_ball, 'spin', 'Mirror Ball', (27.6, 30.8, ceil))
-    place(cp.bulb_string, 'flicker', 'Funhouse Bulbs', (27.5, 32.6, 3.1), a=(-3.2, 0, 0), b=(3.2, 0, 0), sag=0.5, seed=31, red_every=3)
-    door_prop((x1, 26.4), PI / 2, 'Funhouse Exit Door', hinge='right')
+    for k in range(9):
+        bulb(g, (24.6 + k * 0.75, 32.62, 3.05 - 0.2 * sin(PI * k / 8)), P.bulb_red if k % 3 == 0 else P.bulb, 0.04)
+    door_prop((x1, 26.4), PI / 2, 'Funhouse Exit Door', hinge='right', w=1.5, h=2.35, rest=1.1, wood=P.boards_red)
     # creepy clown room set dressing
     g.box((30.3, 29.4, 0.5), (0.8, 0.8, 1.0), P.boards_teal, bevel=0.02)
     g.collide((30.3, 29.4, 0.5), (0.8, 0.8, 1.0))
@@ -1170,8 +1334,35 @@ def build_funhouse():
         bulb(g, (24.4 + k * 1.1, 28.62, 3.1), P.bulb if k % 2 else P.bulb_red, 0.04)
     for k in range(5):
         bulb(g, (17.6 + k * 1.2, 24.42, 3.1), P.bulb if k != 2 else P.bulb_dead, 0.04)
-    for k in range(4):
-        bulb(g, (21.5 + k * 0.7, 32.6, 3.0), P.bulb_red, 0.04)
+    # painted zig-zag dado and arrow signs
+    for (xa, ya, xb, yb, nx, ny) in ((17.16, 24.2, 17.16, 28.4, 1, 0), (30.84, 24.2, 30.84, 28.4, -1, 0),
+                                     (17.2, 24.16, 30.8, 24.16, 0, 1), (17.2, 28.38, 30.8, 28.38, 0, -1),
+                                     (24.12, 28.6, 24.12, 32.84, 1, 0), (30.84, 28.6, 30.84, 32.84, -1, 0)):
+        L = math.dist((xa, ya), (xb, yb))
+        n = int(L / 0.6)
+        step = L / n
+        ang = math.atan2(yb - ya, xb - xa)
+        for k in range(n):
+            t = (k + 0.5) / n
+            x, y = xa + (xb - xa) * t, ya + (yb - ya) * t
+            g.box((x + nx * 0.006, y + ny * 0.006, 0.85), (step / cos(0.45) + 0.02, 0.01, 0.09), P.mustard if k % 2 else P.red,
+                  rz=ang, ry=0.45 if k % 2 else -0.45)
+
+    def arrow_sign(pos, rz, left=True, rods=True):
+        with g.at(pos, rz=rz):
+            g.box((0, -0.03, 0), (0.8, 0.03, 0.3), P.cream)
+            g.box((0, -0.02, 0), (0.86, 0.02, 0.36), P.red)
+            sx = -1 if left else 1
+            tri = [(sx * 0.46, -0.16), (sx * 0.7, 0.0), (sx * 0.46, 0.16)]
+            if sx < 0:
+                tri = tri[::-1]
+            g.prism((0, -0.03, 0), tri, 0.02, P.red, rx=PI / 2)
+            cp.painted_letters(g, 'THIS WAY', (0, -0.047, -0.055), 0.015, P.red)
+            if rods:
+                for x in (-0.3, 0.3):
+                    g.cyl((x, -0.03, 0.15), 0.008, 3.4 - pos[2] - 0.15, P.iron, n=4, caps=False)
+    arrow_sign((24.0, 26.55, 2.92), 0.0, left=True)
+    arrow_sign((27.6, 32.82, 2.2), 0.0, left=True, rods=False)
     m.light((24.0, 26.0, 3.0), '#ffb070', 0.9, 8.0)
 
 
@@ -1203,9 +1394,13 @@ def mirror_ball(p, P):
     p.params.setdefault('sound', 'whirr')
 
 
-def door_prop(c, rz, label, hinge='left', w=1.3, h=2.3):
-    place(pf.door, 'hinge', label, (c[0], c[1], 0), rz=rz, w=w, h=h, wood=P.boards_teal, frame=P.mustard, panel=P.teal,
-          handle=P.brass, hinge=hinge)
+def door_prop(c, rz, label, hinge='left', w=1.3, h=2.3, z=0.0, rest=0.0, wood=None):
+    m.place(pf.door, 'hinge', label, (c[0], c[1], z), rz=rz, w=w, h=h, wood=wood or P.boards_teal, frame=P.mustard, panel=P.teal,
+            handle=P.brass, hinge=hinge, rest=rest)
+
+
+def tree_prop(p, P, h=7.0, crown=2.4, seed=0, style='round'):
+    pf.tree(p, P.bark, P.leaf, h=h, crown=crown, seed=seed, style=style)
 
 
 # ================================================================ caravans and wagons
@@ -1254,8 +1449,9 @@ def caravan(g, body, trim, roof=None, length=4.6, width=2.2, floor=0.85, wall=1.
             for sxs in (-1, 1):
                 g.box((wx + sxs * 0.55, y + sy * 0.02, floor + 1.15), (0.34, 0.04, 0.7), P.teal if seed % 2 else P.red, bevel=0.01)
             g.box((wx, y + sy * 0.06, floor + 0.78), (0.85, 0.12, 0.05), trim)
-            for k in range(4):
-                g.blob((wx - 0.3 + k * 0.2, y + sy * 0.08, floor + 0.85), 0.08, P.leaf[k % 2], seed=k, jitter=0.3, s=(1, 0.7, 0.7))
+            for k in range(3):
+                bulb(g, (wx - 0.24 + k * 0.24, y + sy * 0.09, floor + 0.86), P.leaf[k % 2], 0.09)
+                bulb(g, (wx - 0.12 + k * 0.24, y + sy * 0.1, floor + 0.93), P.red if k != 1 else P.cream, 0.035)
     # porch, door and steps at +X
     g.box((hl + 0.35, 0, floor - 0.05), (0.7, width - 0.2, 0.1), P.planks)
     for sy in (-1, 1):
@@ -1279,7 +1475,7 @@ def caravan(g, body, trim, roof=None, length=4.6, width=2.2, floor=0.85, wall=1.
         aw = 2.2
         for i in range(8):
             x = -hl + 0.3 + (length - 0.6) * (i + 0.5) / 8
-            g.box((x, side * (hw + aw / 2), top - 0.35), ((length - 0.6) / 8 + 0.005, aw + 0.1, 0.03), mats[i % 2], rx=side * 0.22)
+            g.box((x, side * (hw + aw / 2), top - 0.35), ((length - 0.6) / 8 + 0.005, aw + 0.1, 0.03), mats[i % 2], rx=-side * 0.22)
         for x in (-hl + 0.4, hl - 0.4):
             g.cyl((x, side * (hw + aw), 0), 0.045, top - 0.6, P.wood_dark, n=6)
             g.collide((x, side * (hw + aw), (top - 0.6) / 2), (0.15, 0.15, top - 0.6))
@@ -1297,12 +1493,11 @@ def wagon_place(c, rz, **kw):
 
 def build_back_lot():
     # caravan circle (NW)
-    wagon_place((-30.0, 12.5), 0.0, body=P.boards_red, trim=P.mustard, roof=P.canvas_teal, door='hinge', seed=1)
-    door_prop(W((-30.0, 12.5), 0.0, (2.33, 0.0)), PI / 2, 'Caravan Door', hinge='left', w=0.78, h=1.7)
+    wagon_place((-30.0, 12.5), 0.0, body=P.boards_red, trim=P.mustard, roof=P.canvas_teal, door='open', seed=1)
+    door_prop(W((-30.0, 12.5), 0.0, (2.33, 0.0)), PI / 2, 'Caravan Door', hinge='left', w=0.78, h=1.7, z=0.85, rest=0.6,
+              wood=P.boards_cream)
     wagon_place((-31.0, 26.5), -0.25, body=P.boards_teal, trim=P.cream, roof=P.wood_dark, seed=2)
-    wagon_place((-21.0, 31.6), -PI / 2 + 0.2, body=P.boards_cream, trim=P.red, roof=P.canvas_red, door='hinge', seed=3, lit=False)
-    door_prop(W((-21.0, 31.6), -PI / 2 + 0.2, (2.33, 0.0)), -PI / 2 + 0.2 + PI / 2, 'Caravan Door', hinge='right', w=0.78, h=1.7)
-    # (doors above sit on the porch at floor height)
+    wagon_place((-21.0, 31.6), -PI / 2 + 0.2, body=P.boards_cream, trim=P.red, roof=P.canvas_red, door='static', seed=3, lit=False)
     place(cp.campfire, 'flame', 'Campfire', (-23.5, 21.5, 0))
     gc = S(-23.5, 21.5)
     for k, a in enumerate((0.3, 2.0, 3.9, 5.2)):
@@ -1310,12 +1505,11 @@ def build_back_lot():
         with gc.at((x, y, 0), rz=a + PI / 2):
             gc.cyl((-0.8, 0, 0.22), 0.22, 1.6, P.wood, n=8, ry=PI / 2)
             gc.collide((0, 0, 0.22), (1.6, 0.44, 0.44))
-    place(cp.rocking_chair_prop, 'rock', 'Rocking Chair', (-26.4, 14.6, 0), rz=face_rz(1, 1)) if False else None
     place(lambda p, P: pf.rocking_chair(p, P.wood, P.red), 'rock', 'Rocking Chair', (-26.2, 15.0, 0), rz=face_rz(0.6, 1))
-    place(cp.laundry_line, 'cloth', 'Laundry Line', (-24.5, 27.5, 0), rz=0.15, length=5.5, h=2.0,
+    place(cp.laundry_line, 'cloth', 'Laundry Line', (-26.0, 30.0, 0), rz=0.4, length=5.2, h=2.0,
           items=[(0.15, 0.6, 0.75, P.canvas_cream), (0.32, 0.5, 0.9, P.canvas_teal), (0.5, 0.9, 1.1, P.velvet),
                  (0.7, 0.45, 0.6, P.canvas_red), (0.86, 0.55, 0.8, P.canvas_mustard)])
-    place(cp.laundry_line, 'cloth', 'Costume Line', (-34.0, 19.5, 0), rz=PI / 2, length=4.5, h=2.1,
+    place(cp.laundry_line, 'cloth', 'Costume Line', (-34.0, 16.2, 0), rz=PI / 2, length=4.4, h=2.1,
           items=[(0.2, 0.7, 1.2, P.canvas_red), (0.45, 0.6, 0.9, P.canvas_cream), (0.75, 0.8, 1.3, P.canvas_teal)])
     place(cp.gramophone, 'music', 'Gramophone', W((-31.0, 26.5), -0.25, (2.6, 0.2, 0.85)), rz=-0.25 + PI / 2)
     # strongman corner
@@ -1355,10 +1549,103 @@ def build_back_lot():
     place(lambda p, P: pf.barrel(p, P.wood, P.iron), 'jolt', 'Water Barrel', (-18.0, 21.0, 0), key='barrel')
     cp.lamp_static(S(-18, 18), P, (-18.4, 18.0, 0), lit=True)
     # trees in the back lot
-    for i, (x, y, h, cr) in enumerate(((-34.0, 34.0, 8.0, 2.6), (-13.0, 33.8, 7.0, 2.2), (-34.2, 4.0, 6.5, 2.0))):
-        place(pf.tree, 'foliage', 'Elm Tree', (x, y, 0), bark=P.bark, leaves=P.leaf, h=h, crown=cr, seed=i + 3,
-              params={'leaf': '#3a4428'}) if False else place(lambda p, P, h=h, cr=cr, s=i: pf.tree(p, P.bark, P.leaf, h=h, crown=cr, seed=s + 3),
-                                                              'foliage', 'Elm Tree', (x, y, 0), params={'leaf': '#4a4a2a'})
+    cp.tree_static(S(-34.2, 4.0), P, (-34.2, 4.0, 0), h=6.5, crown=2.0, seed=23)
+    for i, (x, y, h, cr) in enumerate(((-34.0, 34.0, 8.0, 2.6), (-13.0, 33.8, 7.0, 2.2))):
+        place(tree_prop, 'foliage', 'Elm Tree', (x, y, 0), params={'leaf': '#4a4a2a'}, h=h, crown=cr, seed=i + 3)
+
+
+def build_menagerie_pen(c=(-19.5, 9.4)):
+    """An empty animal pen with a trough and an open gate: whatever lived here is gone."""
+    g = S(*c)
+    x0, y0 = c
+    hx, hy = 1.9, 1.5
+    with g.at((x0, y0, 0)):
+        posts = [(-hx, -hy), (hx, -hy), (hx, hy), (-hx, hy)]
+        for i in range(4):
+            a, b = posts[i], posts[(i + 1) % 4]
+            if i == 0:   # south side: gate gap
+                segs = [(a, (-0.6, -hy)), ((0.8, -hy), b)]
+            else:
+                segs = [(a, b)]
+            for p0, p1 in segs:
+                L = math.dist(p0, p1)
+                ang = math.atan2(p1[1] - p0[1], p1[0] - p0[0])
+                n = max(1, round(L / 1.0))
+                for k in range(n + 1):
+                    t = k / n
+                    g.box((p0[0] + (p1[0] - p0[0]) * t, p0[1] + (p1[1] - p0[1]) * t, 0.55), (0.1, 0.1, 1.1), P.wood_dark)
+                for z in (0.45, 0.9):
+                    g.box(((p0[0] + p1[0]) / 2, (p0[1] + p1[1]) / 2, z), (L, 0.05, 0.1), P.wood, rz=ang)
+                seg_col(g, p0, p1, 0.2, 0.0, 1.1, step=1.2)
+        with g.at((-0.6, -hy, 0), rz=-1.1):
+            g.box((0.7, 0, 0.45), (1.35, 0.05, 0.1), P.wood)
+            g.box((0.7, 0, 0.9), (1.35, 0.05, 0.1), P.wood)
+            g.box((1.35, 0, 0.55), (0.08, 0.08, 1.0), P.wood_dark)
+            g.box((0.7, 0, 0.67), (1.4, 0.04, 0.08), P.wood, ry=0.33)
+        g.box((0.6, 1.0, 0.25), (1.6, 0.5, 0.5), P.wood, bevel=0.02)
+        g.box((0.6, 1.0, 0.47), (1.45, 0.38, 0.04), P.puddle)
+        g.collide((0.6, 1.0, 0.25), (1.6, 0.5, 0.5))
+        for k in range(6):
+            soft = cp.soft_blob
+            soft(g, (-1.0 + k * 0.32, -0.3 + (k % 2) * 0.5, 0.05), 0.32, P.hay, seed=k, jitter=0.3, s=(1, 1, 0.22))
+        g.lathe((-1.2, 0.9, 0), [(0.15, 0), (0.18, 0.3)], P.iron, n=10, cap_top=False)
+        g.torus((-1.2, 0.9, 0.3), 0.18, 0.012, P.iron, n=10, m=3)
+        g.cyl((1.5, -0.6, 0.06), 0.06, 0.6, P.wood, n=5, rx=PI / 2 - 0.3, rz=0.7)
+    with g.at((x0 + 2.6, y0 - 1.2, 0), rz=face_rz(0.3, -1)):
+        g.box((0, 0, 0.65), (0.06, 0.06, 1.3), P.wood_dark)
+        g.box((0, -0.04, 1.35), (0.75, 0.03, 0.42), P.cream, rz=0.05)
+        cp.painted_letters(g, 'DO NOT FEED', (0, -0.06, 1.24), 0.0145, P.red)
+        g.collide((0, 0, 0.65), (0.2, 0.2, 1.3))
+
+
+def build_canvas_wagon(c=(-27.6, -12.6), rz=0.12):
+    """Flatbed loaded with rolled tent canvas and poles: the show was being packed away."""
+    g = S(*c)
+    with g.at((c[0], c[1], 0), rz):
+        g.box((0, 0, 0.85), (4.4, 2.0, 0.16), P.planks, bevel=0.02)
+        g.box((0, 0, 0.65), (3.8, 1.6, 0.25), P.wood_dark)
+        for sx in (-1, 1):
+            for sy in (-1, 1):
+                cp.spoked_wheel(g, P, (sx * 1.45, sy * 1.08, 0.5), 0.5, spokes=10, rim=P.wood_dark, spoke=P.teal)
+            g.cyl((sx * 1.45, -1.25, 0.5), 0.045, 2.5, P.iron, n=6, rx=-PI / 2)
+        for sy in (-1, 1):
+            for k in range(5):
+                g.box((-1.8 + k * 0.9, sy * 0.98, 1.15), (0.06, 0.06, 0.45), P.wood_dark)
+            g.box((0, sy * 0.98, 1.35), (4.3, 0.05, 0.06), P.wood)
+        for k, (mat, y, z, r) in enumerate(((P.canvas_red, -0.5, 1.2, 0.27), (P.canvas_cream, 0.05, 1.2, 0.27),
+                                            (P.canvas_red, 0.58, 1.2, 0.25), (P.canvas_cream, -0.22, 1.66, 0.25),
+                                            (P.canvas_red, 0.33, 1.66, 0.24))):
+            g.cyl((-1.9, y, z), r, 3.6, mat, n=10, ry=PI / 2)
+            for x in (-1.2, 0.6):
+                g.torus((x, y, z), r + 0.01, 0.015, P.rope, n=10, m=3, ry=PI / 2)
+        for k in range(4):
+            g.cyl((-2.4, -0.7 + k * 0.45, 2.02), 0.07, 5.0, P.cream if k % 2 else P.red, n=6, ry=PI / 2)
+        g.tube([(2.2, -0.6, 0.6), (3.4, -0.65, 0.3), (4.4, -0.7, 0.03)], 0.045, P.wood, n=5)
+        g.tube([(2.2, 0.6, 0.6), (3.4, 0.65, 0.3), (4.4, 0.7, 0.03)], 0.045, P.wood, n=5)
+        g.collide((0, 0, 0.75), (4.4, 2.0, 1.5))
+        g.collide((0, 0, 1.8), (4.4, 1.6, 0.6))
+    place(cp.tarp_sheet, 'cloth', 'Canvas Tarp', W((c[0], c[1], 0), rz, (0.3, -1.03, 1.9)), rz, w=2.6, h=1.1, mat=P.canvas_cream)
+
+
+def build_retired_horses(c=(-9.4, 14.2)):
+    """Two carousel horses taken off their poles, waiting for repairs that never came."""
+    g = S(*c)
+    with g.at((c[0], c[1], 0.21), rz=0.5, rx=PI / 2 - 0.05):
+        cp.horse_geo(g, P, P.cream, P.red, P.mustard)
+    with g.at((c[0] + 1.3, c[1] + 1.1, 0.21), rz=2.3, rx=-PI / 2 + 0.05):
+        cp.horse_geo(g, P, P.teal, P.mustard, P.cream)
+    g.collide((c[0] + 0.6, c[1] + 0.5, 0.35), (3.0, 2.6, 0.7))
+    cp.crate_static(g, P, 0.6, 0.3, (c[0] + 2.6, c[1] - 0.4, 0))
+    g.cyl((c[0] - 1.5, c[1] - 0.8, 0.04), 0.035, 2.3, P.brass, n=6, ry=PI / 2 - 0.02, rz=0.3)
+    g.cyl((c[0] - 1.1, c[1] + 1.6, 0.04), 0.035, 1.6, P.brass, n=6, ry=PI / 2 - 0.02, rz=-0.6)
+    cp.barrel_static(g, P, (c[0] - 1.9, c[1] + 0.9, 0), mat=P.red)
+    place(cp.rocking_horse, 'rock', 'Rocking Horse', (c[0] + 3.0, c[1] + 2.4, 0), rz=-0.7)
+    place(cp.balloons, 'bob', 'Balloon Bunch', (3.2, 16.8, 0), n=5, seed=9, post_mat=P.mustard)
+    build_kiosk((3.4, 21.2), roof=[P.canvas_teal, P.canvas_cream], body=P.boards_teal, label='RIDE TICKETS')
+    for i, (x, y, h, cr, st) in enumerate(((9.2, 15.4, 6.5, 2.1, 'round'), (14.6, 17.6, 7.5, 1.9, 'pine'), (-12.6, 18.6, 7.0, 2.2, 'round'),
+                                           (6.4, -27.0, 6.0, 1.9, 'round'))):
+        cp.tree_static(S(x, y), P, (x, y, 0), h=h, crown=cr, seed=60 + i, style=st)
+        m.collider((x - 0.3, y - 0.3, 0), (x + 0.3, y + 0.3, h * 0.5))
 
 
 def build_sw():
@@ -1391,7 +1678,7 @@ def build_sw():
             gt.collide((0, 0, 0.45), (0.5, 0.5, 0.9))
     place(cp.crystal_ball, 'flicker', 'Crystal Ball', (tx, ty, 0.76))
     place(cp.candle_cluster, 'flame', 'Tarot Candles', (tx + 0.35, ty + 0.25, 0.76), n=3, seed=2)
-    place(cp.wind_chime, 'swing', 'Wind Chime', W(c, rz, (-1.6, 3.05, 2.35)), rz)
+    place(cp.wind_chime, 'swing', 'Wind Chime', W(c, rz, (-1.6, 3.05, 2.19)), rz)
     place(cp.hanging_lantern, 'swing', 'Awning Lantern', W(c, rz, (1.2, 3.2, 2.2)), rz, drop=0.35, light=('#ffaa55', 1.0, 7.0))
     place(cp.hanging_sign, 'swing', 'Fortune Sign', (-17.6, -18.3, 2.6), rz=face_rz(1, 0.8))
     gt.cyl((-17.6 - 0.0, -18.3, 0), 0.07, 2.75, P.wood_dark, n=6)
@@ -1405,11 +1692,13 @@ def build_sw():
     place(lambda p, P: pf.chair(p, P.wood, P.red), 'jolt', 'Toppled Chair', (-11.2, -24.6, 0), rz=1.2)
     cp.popcorn_box(gp, P, (-13.2, -26.6, 0.77), rz=0.4)
     cp.popcorn_box(gp, P, (-8.1, -29.2, 0.77), rz=2.4, tipped=True)
-    wagon_place((-30.5, -31.0), PI / 2 + 0.06, body=P.boards_teal, trim=P.mustard, roof=P.canvas_cream, seed=6, lit=False)
+    wagon_place((-33.3, -26.2), PI / 2, body=P.boards_teal, trim=P.mustard, roof=P.canvas_cream, seed=6, lit=False)
     cp.hay_bale(gp, P, (-26.6, -30.0, 0), rz=0.2)
     cp.hay_bale(gp, P, (-26.0, -31.0, 0), rz=-0.1)
-    cp.barrel_static(gp, P, (-33.6, -24.5, 0))
-    cp.crate_static(gp, P, 0.7, 0.4, (-33.5, -21.0, 0))
+    place(lambda p, P: pf.barrel(p, P.wood, P.iron), 'jolt', 'Rain Barrel', (-34.5, -19.6, 0), key='barrel')
+    cp.crate_static(gp, P, 0.6, 0.2, (-29.2, -33.9, 0))
+    place(cp.cymbal_monkey, 'music', 'Cymbal Monkey', (-29.2, -33.9, 0.6), rz=face_rz(0.6, 1))
+    cp.crate_static(gp, P, 0.7, 0.4, (-34.3, -18.4, 0))
     cp.lamp_static(S(-16, -24), P, (-16.0, -24.5, 0), lit=True)
     place(lambda p, P: pf.tree(p, P.bark, P.leaf, h=7.5, crown=2.4, seed=11), 'foliage', 'Old Oak', (-34.0, -13.5, 0),
           params={'leaf': '#4a4a2a'})
@@ -1427,8 +1716,6 @@ def build_bandwagon(c, rz):
             for sy in (-1, 1):
                 cp.spoked_wheel(g, P, (sx * 1.15, sy * 1.22, 0.52), 0.52, spokes=12, rim=P.mustard, spoke=P.red)
                 g.cyl((sx * 1.6, sy * 1.0, 1.05), 0.05, 2.4, P.brass, n=8)
-            for k in range(3):
-                g.cyl((0, 0, 0), 0, 0, P.brass) if False else None
         for sy in (-1, 1):
             g.box((0, sy * 1.12, 0.78), (3.0, 0.04, 0.3), P.mustard)
             for k in range(5):
@@ -1481,11 +1768,11 @@ def build_east_alley():
         g2.box((-0.3, -0.84, 1.8), (0.4, 0.04, 0.3), P.mustard)
         g2.collide((0, 0, 1.2), (3.4, 2.2, 2.4))
     gg = S(30, -10)
-    for (x, y) in ((30.5, -17.0),):
-        pass
     place(cp.fire_barrel, 'flame', 'Fire Barrel', (30.4, -18.0, 0))
     place(lambda p, P: pf.crate(p, P.wood, P.wood_dark, s=0.7), 'jolt', 'Crate', (34.2, -14.6, 0), rz=0.15, key='crate')
-    place(lambda p, P: pf.crate(p, P.wood, P.wood_dark, s=0.7), 'jolt', 'Crate', (34.3, 1.8, 0), rz=-0.3, key='crate')
+    cp.crate_static(gg, P, 0.7, -0.3, (34.3, 1.8, 0))
+    place(cp.work_lamp, 'flicker', 'Generator Work Lamp', (31.4, 3.4, 0), rz=face_rz(-1, 0.3) + PI / 2)
+    place(cp.hanging_lantern, 'swing', 'Porch Lantern', W((27.0, -33.6), 0.0, (2.6, 0.8, 2.72)), rz=0.0, drop=0.3)
     cp.crate_static(gg, P, 0.9, 0.1, (34.3, -16.0, 0))
     cp.crate_static(gg, P, 0.6, 0.5, (34.2, -16.2, 0.9))
     cp.barrel_static(gg, P, (34.6, 0.3, 0))
@@ -1498,13 +1785,12 @@ def build_east_alley():
     gt.box((34.3, 16.7, 0.93), (1.05, 2.1, 0.06), P.tarp)
     place(cp.tarp_sheet, 'cloth', 'Loose Tarp', (33.75, 16.7, 0.93), rz=PI / 2, w=2.0, h=0.85)
     cp.lamp_static(S(30, 8), P, (30.2, 10.0, 0), lit=False)
-    cp.hay_bale(S(30, -30), P, (29.0, -33.8, 0), rz=0.1)
-    cp.hay_bale(S(30, -30), P, (30.2, -34.0, 0), rz=-0.15)
+    place(cp.hay_prop, 'jolt', 'Hay Bale', (33.6, -25.0, 0), rz=PI / 2 + 0.1)
+    cp.hay_bale(S(33, -25), P, (34.4, -26.2, 0), rz=-0.15)
     wagon_place((27.0, -33.6), 0.0, body=P.boards_red, trim=P.cream, roof=P.wood_dark, seed=7, lit=True)
     place(lambda p, P: pf.tree(p, P.bark, P.leaf, h=7.0, crown=2.3, seed=21), 'foliage', 'Elm Tree', (34.0, 33.6, 0),
           params={'leaf': '#4a4a2a'})
-    place(lambda p, P: pf.tree(p, P.bark, P.leaf, h=6.5, crown=2.0, seed=22), 'foliage', 'Elm Tree', (34.2, 22.2, 0),
-          params={'leaf': '#4a4a2a'})
+    cp.tree_static(S(34.2, 22.2), P, (34.2, 22.2, 0), h=6.5, crown=2.0, seed=22)
 
 
 def build_north_yard():
@@ -1519,13 +1805,13 @@ def build_north_yard():
     c, rz = (11.5, 33.4), 0.0
     gs = S(*c)
     with gs.at((c[0], c[1], 0), rz):
-        booth_shell(gs, 3.6, 2.2, h=2.6, wall=P.boards_teal, trim=P.cream, aw=[P.canvas_red, P.canvas_cream], seed=40, awning=1.0)
+        booth_shell(gs, 3.6, 2.2, h=2.6, wall=P.boards_teal, trim=P.cream, aw=[P.canvas_red, P.canvas_cream], seed=40, awning=1.0,
+                    title='HOT DOGS', ink=P.mustard, back_posters=False)
         gs.box((0.6, 0.2, 1.15), (0.9, 0.5, 0.2), P.iron)
         for k in range(4):
             gs.cyl((0.3 + k * 0.2, 0.2, 1.27), 0.03, 0.005, P.red, n=6, ry=PI / 2)
     place(cp.balloons, 'bob', 'Balloon Bunch', (8.4, 25.2, 0), n=5, seed=6)
     place(cp.lantern_post, 'flame', 'Yard Lantern', (13.2, 24.8, 0), key='lantern_lit', light=True)
-    place(cp.bunting, 'cloth', 'Yard Bunting', (11.0, 30.0, 3.0), a=(-2.2, -3.0, 0.25), b=(2.2, 3.0, 0.0), sag=0.5)
     gs.cyl((8.8, 27.0, 0), 0.07, 3.3, P.wood_dark, n=6)
     gs.collide((8.8, 27.0, 1.6), (0.2, 0.2, 3.3))
     cp.trash_barrel(g, P, (15.5, 20.6, 0))
@@ -1545,14 +1831,14 @@ def build_north_yard():
 
 def build_markers():
     altars = [(-31.6, -31.5), (-13.8, -21.0), (-22.5, -1.0), (-33.4, 22.0), (-12.5, 26.0), (-7.2, 19.5), (11.2, 26.2),
-              (18.7, 26.6), (32.0, 13.5), (31.8, -29.5), (20.5, -27.6), (5.7, 6.8), (-7.0, -6.2)]
+              (19.0, 26.4), (32.0, 13.5), (31.8, -29.5), (20.5, -27.6), (5.0, 6.0), (-3.0, -8.3)]
     for (x, y) in altars:
         m.flag_point((x, y, 0), prefab=lambda g: cp.altar(g, P))
     m.spawn('hunter', (-1.2, -30.2, 0), face=(0, 1))
     m.spawn('hunter', (1.2, -30.2, 0), face=(0, 1))
     m.spawn('hunter', (0.0, -31.4, 0), face=(0, 1))
-    for (x, y) in ((-33.4, 0.0), (-26.0, -26.5), (-9.0, -31.5), (-18.5, 23.5), (-9.5, 9.0), (4.5, 33.5), (15.5, 21.5), (33.0, 27.5),
-                   (31.0, -6.0), (20.5, 1.5), (11.5, -15.0), (-22.5, 3.5), (28.0, 30.5), (-28.0, 5.0)):
+    for (x, y) in ((-33.4, 0.0), (-26.0, -26.5), (-9.0, -31.5), (-18.5, 23.5), (-9.5, 9.0), (4.5, 33.5), (15.0, 22.5), (33.0, 27.5),
+                   (31.0, -6.0), (20.5, 1.5), (11.5, -15.0), (-17.0, -1.0), (28.0, 30.5), (-28.0, 8.5)):
         m.spawn('ghost', (x, y, 0), face=(-x, -y))
 
 
@@ -1569,7 +1855,7 @@ def build_env():
     )
     v = m.preview
     v((0.0, -29.0, 1.6), (0.0, 0.0, 3.5), name='gate')
-    v((8.5, -8.0, 1.6), (0.0, 0.0, 2.6), name='plaza')
+    v((10.2, -5.2, 1.6), (0.0, 0.0, 2.6), name='plaza')
     v((-2.0, 7.5, 1.6), (-2.0, 29.0, 8.0), name='wheel')
     v((-13.2, -1.0, 1.7), (-27.0, -1.0, 2.6), name='bigtop')
     v((20.5, -28.5, 1.6), (20.5, 0.0, 2.0), name='midway')
@@ -1579,10 +1865,16 @@ def build_env():
     v((2.5, -16.5, 1.6), (9.0, -21.0, 1.6), name='lioncage')
     v((24.0, 24.6, 1.6), (21.0, 27.5, 1.4), name='funhouse_in')
     v((31.0, -26.0, 1.6), (32.0, 0.0, 1.6), name='alley')
+    v((1.5, -26.0, 1.7), (0.0, -35.6, 5.0), name='marquee')
+    v((0.0, -2.0, 88.0), (0.0, -1.99, 0.0), name='top')
+    v((-14.5, 4.5, 1.7), (-20.0, 10.5, 0.8), name='pen')
+    v((-20.0, -10.8, 1.7), (-28.5, -13.0, 1.0), name='canvaswagon')
+    v((-4.5, 10.0, 1.7), (-9.6, 14.6, 0.6), name='retired')
 
 
 build_ground()
 build_boundary()
+fence_buntings()
 build_gate()
 build_carousel()
 build_plaza()
@@ -1594,8 +1886,12 @@ build_midway()
 build_funhouse()
 build_back_lot()
 build_sw()
+build_menagerie_pen()
+build_canvas_wagon()
+build_retired_horses()
 build_east_alley()
 build_north_yard()
 build_markers()
 build_env()
+split_untextured_chunks()
 m.finish()

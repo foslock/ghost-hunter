@@ -319,6 +319,7 @@ class Mat:
         self.name = name
         self.uv = uv
         self.uv_rot = uv_rot
+        self.textured = image is not None
         m = bpy.data.materials.new(name)
         try:
             m.use_nodes = True
@@ -492,11 +493,14 @@ class Geo:
         v = np.where(ax == 2, p[:, 1], p[:, 2])
         scale = np.array([m.uv for m in mats])[np.array(idx)][face_of_loop]
         rot = np.array([m.uv_rot for m in mats])[np.array(idx)][face_of_loop]
+        textured = np.array([m.textured for m in mats])[np.array(idx)][face_of_loop]
         cr, sr = np.cos(rot), np.sin(rot)
-        uu = (u * cr - v * sr) / scale
-        vv = (u * sr + v * cr) / scale
-        uvl = mesh.uv_layers.new(name='UVMap')
-        uvl.data.foreach_set('uv', np.stack([uu, vv], axis=1).ravel().astype(np.float32))
+        # untextured faces get constant UVs so the exporter doesn't split vertices at UV seams
+        uu = np.where(textured, (u * cr - v * sr) / scale, 0.0)
+        vv = np.where(textured, (u * sr + v * cr) / scale, 0.0)
+        if textured.any():
+            uvl = mesh.uv_layers.new(name='UVMap')
+            uvl.data.foreach_set('uv', np.stack([uu, vv], axis=1).ravel().astype(np.float32))
         mesh.validate(clean_customdata=False)
         mesh.update()
         return mesh
