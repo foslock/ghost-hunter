@@ -26,7 +26,7 @@ export async function loadMapData(id) {
 }
 
 const gltfCache = new Map();
-function loadGLB(url) {
+export function loadGLB(url) {
   if (!gltfCache.has(url)) gltfCache.set(url, new GLTFLoader().loadAsync(url));
   return gltfCache.get(url);
 }
@@ -83,6 +83,11 @@ export class GameView {
     this.target = null;
     this.localRayAt = -99;
     this.relicVis = { pos: new THREE.Vector3(), has: false };
+    // teleports can arrive while the map is loading; keep the latest so movement isn't rejected
+    this.unsub.push(this.net.on('tp', (m) => {
+      if (this.player) this.player.teleport(m.p, m.yaw, m.seq);
+      else this.pendingTp = m;
+    }));
   }
 
   // ---------------------------------------------------------------- setup
@@ -225,6 +230,7 @@ export class GameView {
     // local player
     this.player = new LocalPlayer(this.role, this.world, this.start.you.pos, this.start.you.yaw);
     this.player.tpSeq = this.start.you.seq;
+    if (this.pendingTp) this.player.teleport(this.pendingTp.p, this.pendingTp.yaw, this.pendingTp.seq);
 
     // post-processing
     const size = this.renderer.getSize(new THREE.Vector2());
@@ -294,7 +300,6 @@ export class GameView {
   bindNet() {
     const on = (t, fn) => this.unsub.push(this.net.on(t, fn));
     on('s', (m) => this.onSnapshot(m));
-    on('tp', (m) => this.player.teleport(m.p, m.yaw, m.seq));
     on('end', (m) => this.onEnd(m));
   }
 
@@ -739,9 +744,7 @@ export class GameView {
     this.audio.stopAll();
     window.removeEventListener('resize', this._resize);
     for (const a of this.avatars.values()) a.dispose();
-    this.scene?.traverse((o) => {
-      if (o.isMesh && o.geometry && !o.geometry.userData.shared) o.geometry.dispose?.();
-    });
+    // level geometry/materials belong to the cached GLB and are reused next round
     this.composer?.dispose?.();
   }
 }

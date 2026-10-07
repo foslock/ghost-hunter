@@ -1,9 +1,8 @@
 // Slow, ambient view of a map behind the menus: a gentle pan from one of the spawns with the
 // props idling, so the lobby previews the selected map.
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { PropCtl } from '../game/props.js';
-import { loadMapData } from '../game/game.js';
+import { loadGLB, loadMapData } from '../game/game.js';
 
 export class MenuBackdrop {
   constructor(renderer) {
@@ -27,7 +26,7 @@ export class MenuBackdrop {
     const token = (this.token = Symbol(mapId));
     let map, gltf;
     try {
-      [map, gltf] = await Promise.all([loadMapData(mapId), new GLTFLoader().loadAsync(`/maps/${mapId}.glb`)]);
+      [map, gltf] = await Promise.all([loadMapData(mapId), loadGLB(`/maps/${mapId}.glb`)]);
     } catch {
       if (this.pendingId === mapId) this.pendingId = null;
       return false;
@@ -48,7 +47,7 @@ export class MenuBackdrop {
       moon.position.copy(d).multiplyScalar(-60);
       scene.add(moon);
     }
-    const level = gltf.scene;
+    const level = gltf.scene.clone(true);
     scene.add(level);
     this.props = [];
     for (const def of map.props) {
