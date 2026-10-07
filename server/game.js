@@ -133,7 +133,9 @@ export class Game {
     const dt = Math.max(0.05, this.time - p.lastMove);
     const maxSpeed = (p.role === ROLES.HUNTER ? HUNTER.speed : GHOST.speed) * 1.6 + 4;
     const d = Math.hypot(x - p.pos.x, z - p.pos.z);
-    if (d > maxSpeed * dt + 1.5) {
+    // too fast, or the path passes through a wall (knee height clears steps and stairs)
+    const ky = Math.max(p.pos.y, y) + 0.6;
+    if (d > maxSpeed * dt + 1.5 || (d > 0.05 && !this.world.segmentClear(p.pos.x, ky, p.pos.z, x, ky, z))) {
       this.teleport(p, [p.pos.x, p.pos.y, p.pos.z]);
       return;
     }
