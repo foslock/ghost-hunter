@@ -714,13 +714,14 @@ class MapBuilder:
         self.seal_windows(a, b, ops, h, t, z)
 
     def seal_windows(self, a, b, openings, h, t, z=0.0):
-        """Invisible colliders across window openings (sill > 0) so nobody can climb out."""
+        """Invisible colliders across window openings (sill >= 0.5 m) so nobody can climb out.
+        Lower sills are treated as door thresholds and left open."""
         ax, ay = a
         bx, by = b
         horizontal = abs(by - ay) < 1e-6
         sign = 1 if (bx - ax if horizontal else by - ay) >= 0 else -1
         for off, w, oh, sill in openings:
-            if sill <= 0:
+            if sill < 0.5:
                 continue
             mid = off * sign
             if horizontal:

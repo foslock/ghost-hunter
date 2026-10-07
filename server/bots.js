@@ -274,6 +274,11 @@ export class Bot {
     }
     this.body.vel.x = vx;
     this.body.vel.z = vz;
+    // hop up ledges and steep stair treads the walk can't step over
+    const wp = this.path?.[0];
+    if (wp && this.body.onGround && wp[1] - p.pos.y > PLAYER.stepHeight * 0.8 && Math.hypot(wp[0] - p.pos.x, wp[2] - p.pos.z) < 1.4) {
+      this.body.vel.y = p.role === ROLES.GHOST ? GHOST.jump : PLAYER.jump;
+    }
     if (Math.hypot(vx, vz) > 0.1 && !(p.role === ROLES.HUNTER && this.aimTarget)) {
       p.yaw = approachAngle(p.yaw, Math.atan2(-vx, -vz), 0.2);
       p.pitch *= 0.9;

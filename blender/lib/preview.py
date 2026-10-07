@@ -102,7 +102,8 @@ def render(mb, data, args):
 
     # overview: an ortho camera just under the ceiling so interiors read
     cam_data.type = 'ORTHO'
-    cam_data.ortho_scale = span * 1.08
+    # fit the whole map into the 16:9 frame
+    cam_data.ortho_scale = max(b[2] - b[0], (b[3] - b[1]) * 16 / 9) * 1.04
     cam.location = (cx, cy, 120)
     cam.rotation_euler = (0, 0, 0)
     cam_data.clip_end = 500

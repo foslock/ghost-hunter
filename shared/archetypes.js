@@ -13,7 +13,7 @@
 
 export const ARCHETYPES = {
   hinge:   { parts: ['pivot'], subtle: 'Nudge', big: 'Slam', sound: 'bang',
-             params: 'axis (y|x|z, default y), dir (+1/-1 opening direction), rest (radians), open (max swing radians)' },
+             params: 'axis (y|x|z, default y), dir (+1/-1 opening direction), closed (offset of the shut pose, 0 = authored pose is shut), open (max swing radians)' },
   swing:   { parts: ['pivot'], subtle: 'Sway', big: 'Shove', sound: 'creak',
              params: 'amp (idle radians), period (seconds), axes (xz|x|z)' },
   rock:    { parts: ['pivot'], subtle: 'Rock', big: 'Thrash', sound: 'creak',

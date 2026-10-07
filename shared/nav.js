@@ -1,6 +1,8 @@
 // Grid navigation built from the collision boxes. Used by server bots and the map validator.
 import { PLAYER } from './constants.js';
 
+export const NAV_RISE = 0.65;
+
 const DIRS = [
   [1, 0, 1], [-1, 0, 1], [0, 1, 1], [0, -1, 1],
   [1, 1, Math.SQRT2], [1, -1, Math.SQRT2], [-1, 1, Math.SQRT2], [-1, -1, Math.SQRT2],
@@ -75,7 +77,8 @@ export class NavGrid {
     const i = (a % this.w) + di, j = ((a / this.w) | 0) + dj;
     if (i < 0 || j < 0 || i >= this.w || j >= this.h) return -1;
     const b = j * this.w + i;
-    if (!this.walkable(b) || Math.abs(this.floor[b] - this.floor[a]) > PLAYER.stepHeight) return -1;
+    // cells are 0.5 m apart, so a 45° stair shows ~0.5 m rises between neighbours; bots hop those
+    if (!this.walkable(b) || Math.abs(this.floor[b] - this.floor[a]) > NAV_RISE) return -1;
     if (di && dj) {
       const c1 = a + di, c2 = a + dj * this.w;
       if (!this.walkable(c1) || !this.walkable(c2)) return -1;
@@ -172,7 +175,7 @@ export class NavGrid {
     const steps = Math.ceil(len / this.cell);
     for (let k = 1; k < steps; k++) {
       const idx = this.index(a[0] + (dx * k) / steps, a[2] + (dz * k) / steps);
-      if (!this.walkable(idx) || Math.abs(this.floor[idx] - a[1]) > PLAYER.stepHeight) return false;
+      if (!this.walkable(idx) || Math.abs(this.floor[idx] - a[1]) > PLAYER.stepHeight * 0.5) return false;
     }
     return true;
   }
