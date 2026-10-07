@@ -1,0 +1,21 @@
+{
+  "name": "ghost-hunter",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "First-person multiplayer hide-and-seek: invisible ghosts smuggle a relic past the hunters.",
+  "scripts": {
+    "dev": "node --watch-path=server --watch-path=shared server/index.js --dev",
+    "build": "vite build",
+    "start": "node server/index.js",
+    "test": "node --test test/",
+    "maps": "bash blender/build_all.sh"
+  },
+  "dependencies": {
+    "three": "^0.186.1",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "vite": "^7.1.0"
+  }
+}
