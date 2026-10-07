@@ -373,7 +373,7 @@ export class GameView {
         const p = this.props.get(ev.prop);
         if (!p) break;
         p.trigger(ev.k, ev.seed, now);
-        if (ev.k === 'b') this.indicate(p.center.toArray(), 'big');
+        if (ev.k === 'b' && p.center.distanceTo(this.camera.position) < 40) this.indicate(p.center.toArray(), 'big');
         break;
       }
       case 'ray':
