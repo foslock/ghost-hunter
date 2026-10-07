@@ -565,6 +565,11 @@ export class GameView {
 
   updateViewModel(t, dt) {
     if (!this.viewModel) return;
+    const stride = Math.floor(this.player.bob / Math.PI);
+    if (stride !== this.lastStride && this.player.moving > 1.5 && this.player.body.onGround) {
+      this.audio.play('step', null, { volume: 0.18 * Math.min(1, this.player.moving / 5), rate: 0.9 + Math.random() * 0.2 });
+    }
+    this.lastStride = stride;
     this.recoil = Math.max(0, (this.recoil || 0) - dt * 4);
     const mv = Math.min(1, this.player.moving / HUNTER.speed);
     const b = this.player.bob;

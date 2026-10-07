@@ -372,7 +372,13 @@ export class Avatar {
       this.obj.visible = present || now - this.lastSeen < 1;
       this.obj.position.copy(this.pos);
       this.obj.rotation.y = this.yaw;
-      const bob = Math.sin(this.walk * 2) * Math.min(1, (this.speed || 0) / 4);
+      const bob = Math.sin(this.walk) * Math.min(1, (this.speed || 0) / 4);
+      // footsteps: one per half stride while moving
+      const stride = Math.floor(this.walk / Math.PI);
+      if (stride !== this.lastStride && (this.speed || 0) > 1.2 && present) {
+        this.engine.audio.play('step', [this.pos.x, this.pos.y + 0.05, this.pos.z], { rate: 0.9 + Math.random() * 0.2, volume: Math.min(1, this.speed / 5) });
+      }
+      this.lastStride = stride;
       this.obj.position.y += Math.abs(bob) * 0.04;
       if (this.head) this.head.rotation.x = this.pitch * 0.6;
       if (this.arm) this.arm.rotation.x = this.pitch + bob * 0.04;

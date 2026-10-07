@@ -78,6 +78,7 @@ class GameServer {
         client.room?.handle(id, msg);
       }
     });
+    ws.on('error', (err) => console.warn(`socket ${id} error: ${err.message}`));
     ws.on('close', () => {
       client.room?.remove(id);
       this.clients.delete(id);

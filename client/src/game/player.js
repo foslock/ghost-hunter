@@ -72,8 +72,8 @@ export class LocalPlayer {
     const ghost = this.role === ROLES.GHOST;
     const bobAmt = ghost ? 0 : Math.min(1, this.moving / HUNTER.speed) * 0.045;
     const float = ghost ? Math.sin(t * 1.6) * 0.035 : 0;
-    cam.position.set(this.body.pos.x, this.eyeY + this.eyeHeight + Math.abs(Math.sin(this.bob * 2)) * bobAmt + float, this.body.pos.z);
-    cam.rotation.set(this.pitch, this.yaw, ghost ? Math.sin(t * 0.9) * 0.012 : Math.sin(this.bob * 2) * bobAmt * 0.12, 'YXZ');
+    cam.position.set(this.body.pos.x, this.eyeY + this.eyeHeight + Math.abs(Math.sin(this.bob)) * bobAmt + float, this.body.pos.z);
+    cam.rotation.set(this.pitch, this.yaw, ghost ? Math.sin(t * 0.9) * 0.012 : Math.sin(this.bob) * bobAmt * 0.12, 'YXZ');
   }
 
   forward(out = new THREE.Vector3()) {
