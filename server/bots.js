@@ -41,6 +41,9 @@ export class Bot {
   hear(ev) {
     if (this.p.role !== ROLES.HUNTER) return;
     const t = this.game.time;
+    // humans localise sounds roughly; so do bots
+    const fuzz = (pt, k = 1.2) => [pt[0] + (Math.random() - 0.5) * 2 * k, pt[1], pt[2] + (Math.random() - 0.5) * 2 * k];
+    if (ev.p && ev.e !== 'channel') ev = { ...ev, p: fuzz(ev.p, ev.e === 'drip' ? 0.3 : 1.4) };
     if (ev.e === 'snap') this.noises.push({ p: ev.p, t, w: 3 });
     else if (ev.e === 'whistle') this.noises.push({ p: ev.p, t, w: 2 });
     else if (ev.e === 'drip') this.noises.push({ p: ev.p, t, w: 4 });
@@ -127,7 +130,9 @@ export class Bot {
     if (!g.active(p) || g.phase !== PHASE.PLAY) return;
     if (g.time > this.nextSnap) {
       this.nextSnap = g.time + 4 + Math.random() * 10;
-      g.snap(p);
+      // a sensible ghost doesn't snap right next to a hunter
+      const hunterNear = g.hunters.some((h) => Math.sqrt(d2(h.pos, p.pos)) < GHOST.snapRadius + 2);
+      if (!hunterNear || Math.random() < 0.15) g.snap(p);
     }
     if (g.time > this.nextManip) {
       this.nextManip = g.time + 2 + Math.random() * 5;
@@ -152,7 +157,9 @@ export class Bot {
     const rel = g.relic;
     if (rel.holder) {
       const h = g.players.get(rel.holder);
-      if (h && Math.sqrt(d2(h.pos, p.pos)) < RELIC.humRadius) this.noises.push({ p: [h.pos.x, h.pos.y + 1, h.pos.z], t: g.time, w: 5 });
+      if (h && Math.sqrt(d2(h.pos, p.pos)) < RELIC.humRadius) {
+        this.noises.push({ p: [h.pos.x + (Math.random() - 0.5) * 2.4, h.pos.y + 1, h.pos.z + (Math.random() - 0.5) * 2.4], t: g.time, w: 5 });
+      }
     }
     // pick the freshest, weightiest noise
     let best = null, bs = 0;
