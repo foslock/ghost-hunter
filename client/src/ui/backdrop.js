@@ -78,6 +78,34 @@ export class MenuBackdrop {
     return true;
   }
 
+  // Dev helper: render the current map from a pose and return a 640x360 JPEG data URL.
+  capture(pos, yaw, pitch = -0.08) {
+    const r = this.renderer;
+    const size = r.getSize(new THREE.Vector2());
+    const ratio = r.getPixelRatio();
+    r.setPixelRatio(1);
+    r.setSize(1280, 720, false);
+    const cam = this.camera;
+    const saved = [cam.position.clone(), cam.rotation.clone(), cam.aspect];
+    cam.aspect = 16 / 9;
+    cam.updateProjectionMatrix();
+    cam.position.set(...pos);
+    cam.rotation.set(pitch, yaw, 0, 'YXZ');
+    r.render(this.scene, cam);
+    const c = document.createElement('canvas');
+    c.width = 640;
+    c.height = 360;
+    c.getContext('2d').drawImage(r.domElement, 0, 0, 640, 360);
+    const url = c.toDataURL('image/jpeg', 0.86);
+    cam.position.copy(saved[0]);
+    cam.rotation.copy(saved[1]);
+    cam.aspect = saved[2];
+    cam.updateProjectionMatrix();
+    r.setPixelRatio(ratio);
+    r.setSize(size.x, size.y, false);
+    return url;
+  }
+
   render() {
     const dt = Math.min(0.05, this.clock.getDelta());
     const t = this.clock.elapsedTime;

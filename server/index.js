@@ -108,6 +108,18 @@ async function main() {
   const dist = path.join(root, 'dist');
   const server = http.createServer((req, res) => {
     if (req.url === '/healthz') { res.writeHead(200); res.end('ok'); return; }
+    if (dev && req.method === 'POST' && req.url.startsWith('/dev/thumb?map=')) {
+      // dev-only: save a lobby thumbnail captured by the client renderer
+      const id = new URL(req.url, 'http://x').searchParams.get('map').replace(/[^a-z0-9_-]/gi, '');
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const b64 = Buffer.concat(chunks).toString().replace(/^data:image\/jpeg;base64,/, '');
+        fs.writeFileSync(path.join(root, 'client', 'public', 'maps', `${id}.jpg`), Buffer.from(b64, 'base64'));
+        res.writeHead(200); res.end('saved');
+      });
+      return;
+    }
     if (vite) { vite.middlewares(req, res); return; }
     const url = decodeURIComponent(new URL(req.url, 'http://x').pathname);
     let file = path.join(dist, url);
