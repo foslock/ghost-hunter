@@ -136,3 +136,19 @@ The goal is a cohesive, handmade-looking stylised diorama, not "AI slop":
   walls, clutter on shelves.
 - Every area should be recognisable at a glance (landmarks help players call out locations).
 - Keep the GLB ≤ 10 MB and ≤ 60 materials.
+
+## Lessons from building the three maps
+
+- **Instancing.** Static geometry is merged into spatial chunks, so a repeated bookcase is stored once
+  per copy. For heavily repeated furniture, create linked-duplicate Blender objects that share one
+  mesh before `finish()` (see `inst()` in `blender/maps/manor.py`); the exporter writes the mesh once.
+- **Bevels cost vertices.** A bevelled box exports roughly 4× the vertices of a plain one. Skip
+  bevels on thin trim and anything small.
+- **Stairs and raised floors.** The nav grid samples one floor per 0.5 m cell and accepts rises up
+  to 0.65 m between neighbouring cells (bots hop the steep ones). Snap platform edges to the 0.5 m
+  grid where you can, and fill under lofts so the walkable surface is unambiguous.
+- **Windows vs doors.** `m.wall` seals openings whose sill is ≥ 0.5 m with an invisible collider;
+  lower sills count as door thresholds and stay open.
+- **Keyed props** (`place(..., key=...)`) share meshes and inherit the prefab's archetype params;
+  params passed explicitly to `place` override them.
+- **Validator hangs** usually mean the GLB was being rewritten mid-read; rerun it.

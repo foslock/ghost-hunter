@@ -82,6 +82,16 @@ wider, a chair that has moved a few centimetres — the ectoplasm trail and the 
 Map, round length, penalty time, relic grip, bot skill, and teams: move any player between
 Hunters and Ghosts, add/remove bots on either side, or shuffle with a chosen number of hunters.
 
+## Maps
+
+| map | setting | penalty box |
+|---|---|---|
+| **Hollowmere Manor** (60 × 44 m) | Thirteen candlelit rooms around a two-storey foyer: parlour, library stacks, dining room set mid-dinner, kitchen and scullery, nursery, billiard and music rooms, portrait gallery, glass conservatory. Many doorways form loops. | The Birdcage — a domed iron cage in the conservatory |
+| **Thistlewick Farm** (70 × 70 m) | Autumn farmstead at night: walk-through barn with a hay loft, farmhouse porch and kitchen, a corn maze, orchard, pumpkin patch, windmill and pond, laundry lines, creek. | The Chicken Run — a wire-mesh cage by the coop |
+| **Lanternfall Carnival** (71 × 71 m) | Shuttered fairground: walk-in big top, carousel plaza, Ferris wheel, midway booths and high striker, funhouse, fortune teller and calliope wagons, caravan back lot. | The Lion Cage — a barred circus wagon |
+
+Each has 13 identical altars, 12–14 ghost spawns and ~130 interactive props across all archetypes.
+
 ## Architecture
 
 ```
