@@ -23,6 +23,9 @@ npm start          # serves dist/ and the WebSocket game server on $PORT (defaul
 
 ### Deploying (Render)
 
+Live: **https://ghost-hunter-ylbq.onrender.com** (production, `production` branch, in the "Ghost
+Hunters" Render project) and **https://ghost-hunter-staging.onrender.com** (staging, `main`).
+
 `render.yaml` is a Render Blueprint with two Node web services on the starter plan, following the
 same branch layout as decks-and-hexes: **`ghost-hunter`** deploys from the `production` branch and
 **`ghost-hunter-staging`** from `main`. Each runs `npm ci --include=dev && npm run build`, then
