@@ -202,13 +202,14 @@ def rug(x0, y0, x1, y1, field, border=None, fringe=True):
     g = geo_at(((x0 + x1) / 2, (y0 + y1) / 2))
     border = border or M.velvet_moss
     cx, cy, w, d = (x0 + x1) / 2, (y0 + y1) / 2, x1 - x0, y1 - y0
-    g.box((cx, cy, 0.006), (w, d, 0.012), border)
-    g.box((cx, cy, 0.008), (w - 0.36, d - 0.36, 0.013), field)
-    g.box((cx, cy, 0.009), (w - 0.5, d - 0.5, 0.0135), field)
+    # layers sit 4 mm apart so the depth buffer can always tell them apart
+    g.box((cx, cy, 0.008), (w, d, 0.016), border)
+    g.box((cx, cy, 0.010), (w - 0.36, d - 0.36, 0.020), field)
+    g.box((cx, cy, 0.012), (w - 0.5, d - 0.5, 0.024), field)
     for sx in (-1, 1):
-        g.box((cx + sx * (w / 2 - 0.24), cy, 0.0095), (0.03, d - 0.42, 0.014), M.brass if field is M.rug_red else M.paper)
+        g.box((cx + sx * (w / 2 - 0.24), cy, 0.014), (0.03, d - 0.42, 0.028), M.brass if field is M.rug_red else M.paper)
         if fringe:
-            g.box((cx + sx * (w / 2 + 0.04), cy, 0.004), (0.08, d - 0.04, 0.008), M.linen)
+            g.box((cx + sx * (w / 2 + 0.04), cy, 0.005), (0.08, d - 0.04, 0.010), M.linen)
 
 
 # =================================================================== rooms

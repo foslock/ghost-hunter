@@ -86,7 +86,7 @@ def rug(g, w, d, mat, border=None):
 
 def window(g, w, h, frame, glass, sill_mat=None, mullions=2, t=0.34):
     """Window filling a wall opening; origin at the bottom centre of the opening, wall along X."""
-    g.box((0, 0, h / 2), (w, 0.04, h), glass)
+    g.box((0, 0, h / 2), (w - 0.04, 0.04, h - 0.04), glass)  # edges tucked inside the frame
     for sx in (-1, 1):
         g.box((sx * (w / 2 - 0.04), 0, h / 2), (0.08, t + 0.02, h), frame)
     g.box((0, 0, h - 0.04), (w, t + 0.02, 0.08), frame)

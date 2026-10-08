@@ -15,6 +15,12 @@ node scripts/check-map.mjs <id> --ascii
 
 `--moody` renders previews with the in-game night lighting instead of bright inspection lighting.
 Geometry is exported with meshopt compression (decoded by the client); `--no-compress` disables it.
+
+Every build also prevents z-fighting automatically: closed geometry renders single-sided (open
+shells get a double-sided copy of their material), and wherever coplanar faces of different
+materials overlap, the one that should show (thinnest, then smallest) stays put while the others
+sink a few millimetres into their own solids. `--zcheck` writes any remaining overlaps to
+`blender/build/zfight_<id>.txt`; still, author decals and panes a few millimetres off surfaces.
 `--blend` also saves `blender/build/<id>.blend` for inspection.
 
 ## Coordinates and scale

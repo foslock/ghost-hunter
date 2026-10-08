@@ -541,17 +541,20 @@ def woodpile(g, M, length=3.0, h=1.4, seed=0, col=True, back=True):
     for r in range(rows):
         z = 0.08 + r * 0.155
         x = -length / 2 + 0.08 + (r % 2) * 0.07
+        rr = rng.uniform(0.055, 0.074)  # keeps rows (0.155 apart) from overlapping
         while x < length / 2 - 0.08:
-            rr = rng.uniform(0.06, 0.085)
             for sy in ((-1, 1) if back else (-1,)):
-                y = sy * (0.335 + rng.uniform(0, 0.03))
+                # depth tiers 12 mm apart; cores sit 6 mm proud, so rings and cores never share a plane
+                y = sy * (0.335 + 0.012 * rng.randrange(3))
                 ring = [(x + math.cos(TAU * k / 6 + 0.3) * rr, z + math.sin(TAU * k / 6 + 0.3) * rr) for k in range(6)]
                 core = [(x + (px - x) * 0.72, z + (pz - z) * 0.72) for px, pz in ring]
                 for poly, mat, dy in ((ring, M.bark, 0.0), (core, rng.choice((M.wood_light, M.wood_light, M.wood_mid)), 0.006)):
                     vs = [(px, y + sy * dy, pz) for px, pz in poly]
                     f = tuple(range(6)) if sy < 0 else tuple(reversed(range(6)))
                     g.add((vs, [f], [False]), mat)
-            x += rr * 2.05
+            nr = rng.uniform(0.055, 0.074)
+            x += rr + nr + 0.008  # neighbours never overlap
+            rr = nr
     for sx in (-1, 1):
         g.box((sx * (length / 2 + 0.05), 0, h / 2 + 0.1), (0.1, 0.1, h + 0.2), M.wood_dk)
     if col:

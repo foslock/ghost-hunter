@@ -866,9 +866,87 @@ class MapBuilder:
         )
         return data
 
+    def _set_sidedness(self):
+        """Closed geometry renders single-sided (back faces culled), so hidden faces such as a rug's
+        underside or a pane's back can't z-fight with the surface they rest on. Connected shells
+        with open edges (cups, sheets, open cylinders) get a double-sided copy of their material,
+        so only they pay for it."""
+        for m in bpy.data.materials:
+            m.use_backface_culling = True
+        clones = {}
+
+        def double(mat):
+            c = clones.get(mat.name)
+            if c is None:
+                c = mat.copy()
+                c.name = mat.name + '_2s'
+                c.use_backface_culling = False
+                clones[mat.name] = c
+            return c
+
+        for me in {o.data for o in bpy.context.scene.objects if o.type == 'MESH'}:
+            if not me.polygons or not me.materials:
+                continue
+            nv = len(me.vertices)
+            co = np.empty(nv * 3)
+            me.vertices.foreach_get('co', co)
+            _, weld = np.unique(np.round(co.reshape(-1, 3), 4), axis=0, return_inverse=True)
+            weld = weld.ravel()
+            nl = len(me.loops)
+            lv = np.empty(nl, dtype=np.int64)
+            me.loops.foreach_get('vertex_index', lv)
+            lv = weld[lv]
+            np_ = len(me.polygons)
+            start = np.empty(np_, dtype=np.int64)
+            total = np.empty(np_, dtype=np.int64)
+            me.polygons.foreach_get('loop_start', start)
+            me.polygons.foreach_get('loop_total', total)
+            nxt = np.arange(nl) + 1
+            nxt[start + total - 1] = start  # wrap each polygon's last loop to its first
+            a, b = lv, lv[nxt]
+            keys = np.minimum(a, b) * (nv + 1) + np.maximum(a, b)
+            _, inv, counts = np.unique(keys, return_inverse=True, return_counts=True)
+            boundary = counts[inv.ravel()] == 1
+            if not boundary.any():
+                continue
+            # connected shells over welded vertices (label propagation with pointer jumping)
+            label = np.arange(weld.max() + 1)
+            for _ in range(200):
+                la, lb = label[a], label[b]
+                m = np.minimum(la, lb)
+                before = label.copy()
+                np.minimum.at(label, a, m)
+                np.minimum.at(label, b, m)
+                label = label[label]
+                if np.array_equal(label, before):
+                    break
+            open_shells = np.unique(label[a[boundary]])
+            face_shell = label[lv[start]]
+            open_face = np.isin(face_shell, open_shells)
+            mi = np.empty(np_, dtype=np.int64)
+            me.polygons.foreach_get('material_index', mi)
+            slot = {}
+            for idx in np.unique(mi[open_face]):
+                if idx >= len(me.materials) or me.materials[idx] is None:
+                    continue
+                me.materials.append(double(me.materials[idx]))
+                slot[idx] = len(me.materials) - 1
+            for idx, new in slot.items():
+                mi[open_face & (mi == idx)] = new
+            me.polygons.foreach_set('material_index', mi.astype(np.int32))
+            me.update()
+        if '--sides' in script_args():
+            print(f'[sides] double-sided copies: {", ".join(sorted(clones))}')
+
     def finish(self):
         args = script_args()
         self._build_objects()
+        self._set_sidedness()
+        from . import zfight
+        if '--no-zfix' not in args:
+            print(f'[gh] lifted {zfight.fix()} coplanar faces to stop z-fighting')
+        if '--zcheck' in args:
+            zfight.report(self.id, BUILD_DIR)
         os.makedirs(MAP_GLB_DIR, exist_ok=True)
         os.makedirs(MAP_JSON_DIR, exist_ok=True)
         glb = os.path.join(MAP_GLB_DIR, f'{self.id}.glb')

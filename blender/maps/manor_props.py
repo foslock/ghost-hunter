@@ -618,7 +618,7 @@ def fire(p, M, w=1.2, light=(WARM, 1.5, 9.0)):
 def window(g, M, w, h):
     """Sash window filling a wall opening (origin bottom centre, wall along X), moonlit panes."""
     t = 0.34
-    g.box((0, 0, h / 2), (w, 0.04, h), M.glass)
+    g.box((0, 0, h / 2), (w - 0.04, 0.04, h - 0.04), M.glass)  # edges tucked inside the frame
     for sx in (-1, 1):
         g.box((sx * (w / 2 - 0.04), 0, h / 2), (0.08, t, h), M.walnut)
     g.box((0, 0, h - 0.04), (w, t, 0.08), M.walnut)

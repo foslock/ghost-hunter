@@ -100,7 +100,9 @@ for (let i = 0; i < fp.length; i++) for (let j = i + 1; j < fp.length; j++) {
 const size = fs.statSync(glbPath).size / 1e6;
 if (size > 10) warns.push(`GLB is ${size.toFixed(1)} MB (budget 10 MB)`);
 if (map.lights.length > 28) warns.push(`${map.lights.length} lights (client renders at most ~24 nearest; budget 28)`);
-if ((gltf.materials || []).length > 60) warns.push(`${gltf.materials.length} materials (budget 60)`);
+// double-sided copies (`*_2s`) are made automatically for open shells and don't count
+const authored = new Set((gltf.materials || []).map((m) => m.name.replace(/_2s$/, ''))).size;
+if (authored > 60) warns.push(`${authored} authored materials (budget 60)`);
 const reachCells = reach.reduce((a, b) => a + b, 0);
 
 console.log(`map ${map.id} "${map.name}"`);

@@ -182,7 +182,7 @@ export class GameView {
     }
 
     // camera + view models
-    this.camera = new THREE.PerspectiveCamera(this.app.settings.fov || 75, innerWidth / innerHeight, 0.05, 400);
+    this.camera = new THREE.PerspectiveCamera(this.app.settings.fov || 75, innerWidth / innerHeight, 0.1, 400);
     scene.add(this.camera);
     if (!this.isGhost) {
       const spot = new THREE.SpotLight(0xffe7c0, 34, 26, 0.45, 0.6, 1.5);
