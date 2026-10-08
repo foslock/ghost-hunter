@@ -208,3 +208,32 @@ test('built maps load with nav grids and every altar pair list is non-empty', ()
     assert.ok(g.pairs.length > 0, `${id} has usable altar pairs`);
   }
 });
+
+test('waiting room: everyone visible, practice freezes have no penalty, pads switch teams', () => {
+  const lobbyMap = loadMap('lobby');
+  assert.ok(lobbyMap, 'lobby map built');
+  const sent = [];
+  const roles = [];
+  const room = { send: (id, m) => sent.push({ id, m }), broadcast() {}, setRole: (id, role) => { roles.push([id, role]); g.setRole(id, role); } };
+  const g = new Game(room, lobbyMap, { roundTime: 300, penaltyTime: 30, carryLimit: 14 }, [R('h', ROLES.HUNTER), R('g1', ROLES.GHOST)], Math.random, 'lobby');
+  const h = g.players.get('h'), g1 = g.players.get('g1');
+  assert.equal(g.phase, PHASE.LOBBY);
+  place(h, 0, 0); place(g1, 0, -4);
+  g.snapAcc = 1;
+  g.tick(1 / 30);
+  const snap = sent.find((x) => x.id === 'h' && x.m.t === 's').m;
+  assert.deepEqual(snap.pl.map((e) => e[0]), ['g1'], 'hunters see ghosts in the waiting room');
+  g.ray(h, [0, 0, -1]);
+  assert.ok(g.isFrozen(g1));
+  for (let i = 0; i < 60; i++) g.tick(1 / 30);
+  assert.ok(!g.isFrozen(g1) && !g.inPenalty(g1), 'short freeze, no penalty');
+  const pad = lobbyMap.data.lobby.pads.hunter;
+  place(g1, pad.pos[0], pad.pos[2], pad.pos[1]);
+  for (let i = 0; i < 40; i++) g.tick(1 / 30);
+  assert.deepEqual(roles, [['g1', ROLES.HUNTER]]);
+  assert.equal(g1.role, ROLES.HUNTER);
+  // switching back through the menu while standing on the hunters' pad must not bounce back
+  g.setRole('g1', ROLES.GHOST);
+  for (let i = 0; i < 60; i++) g.tick(1 / 30);
+  assert.equal(g1.role, ROLES.GHOST);
+});

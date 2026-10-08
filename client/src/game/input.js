@@ -5,7 +5,7 @@ export class Input {
     this.keys = new Set();
     this.dx = 0;
     this.dy = 0;
-    this.locked = false;
+    this.locked = document.pointerLockElement === canvas;
     this.dragging = false;
     this.sensitivity = Number(localStorage.getItem('gh.sens') || 1);
     this.invertY = localStorage.getItem('gh.invert') === '1';
@@ -100,7 +100,7 @@ export class Input {
     return out;
   }
 
-  dispose() {
+  dispose({ keepLock = false } = {}) {
     window.removeEventListener('keydown', this._down);
     window.removeEventListener('keyup', this._up);
     window.removeEventListener('mousemove', this._move);
@@ -108,6 +108,6 @@ export class Input {
     window.removeEventListener('mouseup', this._mouseup);
     window.removeEventListener('blur', this._blur);
     document.removeEventListener('pointerlockchange', this._lockchange);
-    this.exitLock();
+    if (!keepLock) this.exitLock();
   }
 }

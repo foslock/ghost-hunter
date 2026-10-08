@@ -350,6 +350,7 @@ export class Avatar {
         const d = viewer ? viewer.distanceTo(this.pos) : 2;
         op = THREE.MathUtils.clamp(1 - (d - 1.2) / GHOST.seeRadius, 0.12, 0.55);
       }
+      if (this.engine.lobby) op = 0.62;
       if (f & PF.EXPOSED) op = 0.75;
       if (f & PF.PENALTY) op = 0.42;
       if (f & PF.FROZEN) op = 0.8;

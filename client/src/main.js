@@ -61,6 +61,7 @@ const charsReady = app.characters.load();
 const backdrop = new MenuBackdrop(renderer);
 app.backdrop = backdrop;
 renderer.setAnimationLoop(() => {
+  if (app.switching) return; // keep the last frame on screen while the next view loads
   if (app.game && !app.game.disposed && app.game.composer) app.game.frame();
   else backdrop.render();
 });
@@ -69,7 +70,8 @@ addEventListener('resize', () => {
 });
 
 const net = app.net;
-// Dev shortcut: ?test=ghost|hunter[&map=id][&bots=n][&time=s] spins up a room with bots and starts it.
+// Dev shortcut: ?test=ghost|hunter[&map=id][&bots=n][&time=s][&stay=1] spins up a room with bots and
+// starts a round (or, with stay=1, stays in the waiting room).
 const testParams = new URLSearchParams(location.search);
 const testRole = import.meta.env.DEV ? testParams.get('test') : null;
 let testState = testRole ? 'create' : null;
@@ -84,7 +86,7 @@ net.on('room', (m) => {
   if (testParams.get('map')) settings.map = testParams.get('map');
   if (testParams.get('time')) settings.roundTime = Number(testParams.get('time'));
   net.send(settings);
-  setTimeout(() => net.send({ t: 'start' }), 200);
+  if (!testParams.get('stay')) setTimeout(() => net.send({ t: 'start' }), 200);
 });
 net.on('hello', () => {
   if (testState === 'create') {
@@ -104,10 +106,15 @@ net.on('room', (m) => {
   const first = !app.ui.room;
   app.ui.room = m;
   if (first) app.ui.chat.push({ sys: true, text: `Joined room ${m.code}.` });
-  if (!app.game && m.phase === 'lobby' && testState !== 'started') app.ui.showLobby(m);
+  if (!new URLSearchParams(location.search).get('test')) history.replaceState(null, '', `?room=${m.code}`);
+  if (app.game?.lobby) app.game.onRoom(m);
+  if (app.ui.screen === 'lobby') app.ui.showLobby(m, app.game);
   backdrop.show(m.settings.map);
 });
-net.on('chat', (m) => app.ui.addChat(m));
+net.on('chat', (m) => {
+  app.ui.addChat(m);
+  if (app.game?.lobby) app.game.hud.feed(`${m.from}: ${m.text}`, 'chat');
+});
 net.on('error', (m) => {
   app.ui.toast(m.msg, 'error');
   if (!app.ui.room && app.ui.screen !== 'home') app.ui.showHome();
@@ -119,24 +126,39 @@ net.on('kicked', () => {
   app.ui.showHome();
   app.ui.toast('You were removed from the room.', 'error');
 });
-net.on('wait', (m) => { if (!app.game) app.ui.showWait(m); });
+// 'start' arrives for the waiting room (on joining, after a team change, after a round) and for
+// each round. The new view replaces the old one without dropping the mouse lock.
+let startSeq = 0;
 net.on('start', async (m) => {
-  app.leaveGame();
-  app.ui.showLoading('Summoning the spirits…');
+  const seq = ++startSeq;
+  const prev = app.game;
+  const locked = document.pointerLockElement === canvas;
+  const quiet = prev && prev.lobby && m.mode === 'lobby'; // e.g. switching teams in the waiting room
+  if (!quiet) app.ui.showLoading(m.mode === 'lobby' ? 'Opening the waiting room…' : 'Summoning the spirits…');
   try {
     await Promise.all([charsReady, app.audio.init()]);
+    if (seq !== startSeq) return; // superseded by a newer start
+    app.switching = true;
+    if (prev) {
+      prev.switching = true;
+      prev.dispose({ keepLock: true });
+      app.game = null;
+    }
     const game = new GameView(app, m);
-    await game.init((t) => app.ui.setLoadingText(t));
+    await game.init((t) => { if (!quiet) app.ui.setLoadingText(t); });
+    if (seq !== startSeq) { game.dispose({ keepLock: true }); return; }
     app.game = game;
-    app.ui.showClickToPlay(game);
+    app.switching = false;
+    if (document.pointerLockElement === canvas || (quiet && locked)) {
+      app.ui.clear();
+      if (m.mode === 'round') game.hud.feed(game.isGhost ? 'You are a ghost. Find the relic!' : 'You are a hunter. Listen closely…', 'relic');
+    } else if (m.mode === 'lobby') app.ui.showClickToEnter(game);
+    else app.ui.showClickToPlay(game);
   } catch (err) {
+    app.switching = false;
     console.error(err);
     app.ui.toast(`Failed to load the map: ${err.message}`, 'error');
   }
-});
-net.on('lobby', () => {
-  app.leaveGame();
-  if (app.ui.room) app.ui.showLobby(app.ui.room);
 });
 net.on('close', ({ was }) => {
   if (!was) return;

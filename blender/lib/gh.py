@@ -605,6 +605,7 @@ class MapBuilder:
         self.lights = []
         self.env_data = {}
         self.preview_views = []
+        self.extra = {}
         self._flame = None
 
     # --- materials ---
@@ -784,6 +785,11 @@ class MapBuilder:
     def env(self, **kw):
         self.env_data.update(kw)
 
+    def meta(self, key, value):
+        """Extra map-specific data written verbatim into the JSON (positions in Blender space are
+        not converted; use to_three() for those)."""
+        self.extra[key] = value
+
     def preview(self, pos, look, lens=22, name=None):
         self.preview_views.append((pos, look, lens, name))
 
@@ -864,6 +870,7 @@ class MapBuilder:
             props=props,
             colliders=cols,
         )
+        data.update(self.extra)
         return data
 
     def _set_sidedness(self):

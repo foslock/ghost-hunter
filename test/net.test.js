@@ -42,8 +42,19 @@ test('two players: create, join, teams, start, snapshots, sound routing', async 
   const room = await a.wait((m) => m.t === 'room');
   assert.equal(room.host, helloA.id);
   assert.match(room.code, /^[A-Z]{4}$/);
+  // joining puts you straight into the waiting room
+  const lobbyA = await a.wait((m) => m.t === 'start' && m.mode === 'lobby');
+  assert.equal(lobbyA.map, 'lobby');
   b.send({ t: 'join', code: room.code, name: 'Bob' });
   await b.wait((m) => m.t === 'room' && m.players.length === 2);
+  const lobbyB = await b.wait((m) => m.t === 'start' && m.mode === 'lobby');
+  assert.ok(lobbyB.roster.some((r) => r.id === helloA.id), 'sees the other player in the waiting room');
+  // everyone is visible in the waiting room
+  const seen = await a.wait((m) => m.t === 's' && m.ph === 'lobby' && m.pl.some((e) => e[0] === helloB.id));
+  assert.ok(seen);
+  // snaps work in the waiting room
+  b.send({ t: 'st', p: lobbyB.you.pos, y: 0, pi: 0, tp: lobbyB.you.seq });
+  b.send({ t: 'snap' });
   // the first player becomes a hunter, the second a ghost
   a.send({ t: 'team', id: helloA.id, role: 'hunter' });
   a.send({ t: 'team', id: helloB.id, role: 'ghost' });
@@ -52,19 +63,19 @@ test('two players: create, join, teams, start, snapshots, sound routing', async 
   // non-hosts can't start
   b.send({ t: 'start' });
   a.send({ t: 'start' });
-  const startA = await a.wait((m) => m.t === 'start');
-  const startB = await b.wait((m) => m.t === 'start');
+  const startA = await a.wait((m) => m.t === 'start' && m.mode === 'round');
+  const startB = await b.wait((m) => m.t === 'start' && m.mode === 'round');
   assert.equal(startA.you.role, 'hunter');
   assert.equal(startB.you.role, 'ghost');
-  const snapB = await b.wait((m) => m.t === 's');
+  const snapB = await b.wait((m) => m.t === 's' && m.ph !== 'lobby');
   assert.ok(snapB.r, 'ghosts receive the relic state');
-  const snapA = await a.wait((m) => m.t === 's');
+  const snapA = await a.wait((m) => m.t === 's' && m.ph !== 'lobby');
   assert.equal(snapA.r, undefined, 'hunters do not');
   assert.equal(snapA.ph, 'blind');
   // a ghost snapping far from the hunter is not heard by the hunter
   b.send({ t: 'snap' });
   await new Promise((r) => setTimeout(r, 300));
-  const heard = a.inbox.some((m) => m.t === 's' && m.ev?.some((e) => e.e === 'snap'));
+  const heard = a.inbox.some((m) => m.t === 's' && m.ph !== 'lobby' && m.ev?.some((e) => e.e === 'snap'));
   const dist = Math.hypot(startA.you.pos[0] - startB.you.pos[0], startA.you.pos[2] - startB.you.pos[2]);
   if (dist > 9.5) assert.equal(heard, false);
   // chat is lobby-only

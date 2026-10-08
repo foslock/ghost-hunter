@@ -12,9 +12,10 @@ const fmt = (s) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 export class Hud {
-  constructor(root, role, mapName, penaltyLabel) {
+  constructor(root, role, mapName, penaltyLabel, opts = {}) {
     this.root = root;
     this.role = role;
+    this.lobby = !!opts.lobby;
     root.innerHTML = '';
     root.classList.remove('hidden');
     const ghost = role === ROLES.GHOST;
@@ -39,22 +40,31 @@ export class Hud {
     this.blind = el('div', 'blind hidden', '<div>The ghosts are hiding…</div><div class="n">10</div><div class="muted" style="font-size:18px;font-family:var(--body)">Listen for snaps and whistles. Watch things move.</div>');
     this.blindN = this.blind.querySelector('.n');
     this.score = el('div', 'scoreboard panel hidden');
-    this.help = el('div', 'help', ghost
-      ? '<kbd>WASD</kbd> move · <kbd>Space</kbd> float · <kbd>LMB</kbd> snap · <kbd>F</kbd> whistle · <kbd>E</kbd> subtle · <kbd>Q</kbd> big · <kbd>G</kbd> drop relic · <kbd>Tab</kbd> scores'
-      : '<kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>LMB</kbd> revealer · <kbd>Shift</kbd> walk · <kbd>Tab</kbd> scores');
+    const extra = this.lobby ? ' · <kbd>Enter</kbd> chat · <kbd>Esc</kbd> room menu' : ' · <kbd>Tab</kbd> scores';
+    this.help = el('div', 'help', (ghost
+      ? '<kbd>WASD</kbd> move · <kbd>Space</kbd> float · <kbd>LMB</kbd> snap · <kbd>F</kbd> whistle · <kbd>E</kbd> subtle · <kbd>Q</kbd> big' + (this.lobby ? '' : ' · <kbd>G</kbd> drop relic')
+      : '<kbd>WASD</kbd> move · <kbd>Space</kbd> jump · <kbd>LMB</kbd> revealer · <kbd>Shift</kbd> walk') + extra);
     this.penaltyLabel = penaltyLabel || 'the penalty box';
     root.append(this.vignette, this.markers, this.tags, this.top, this.roleBox, this.feedBox, this.ringSvg, this.cross, this.bracket, this.prompt, this.meters, this.bar, this.banner, this.help, this.score, this.blind);
+    if (this.lobby) {
+      // the waiting room's walls carry the instructions; keep the screen clear
+      this.top.remove();
+      this.roleBox.remove();
+      this.help.remove();
+      this.chatbox = el('div', 'chatbox hidden', '<input type="text" maxlength="160" placeholder="Say something… (Enter to send, Esc to cancel)" />');
+      root.append(this.chatbox);
+    }
 
     this.abilities = {};
     const abil = ghost
-      ? [['snap', 'LMB', 'Snap'], ['whistle', 'F', 'Whistle'], ['subtle', 'E', 'Subtle'], ['big', 'Q', 'Big'], ['drop', 'G', 'Drop']]
+      ? [['snap', 'LMB', 'Snap'], ['whistle', 'F', 'Whistle'], ['subtle', 'E', 'Subtle'], ['big', 'Q', 'Big']].concat(this.lobby ? [] : [['drop', 'G', 'Drop']])
       : [['ray', 'LMB', 'Revealer']];
     for (const [k, key, label] of abil) {
       const b = el('div', 'ab ready', `<kbd>${key}</kbd><span>${label}</span><div class="cdfill" style="height:0"></div><div class="cdtext"></div>`);
       this.abilities[k] = { el: b, fill: b.querySelector('.cdfill'), text: b.querySelector('.cdtext') };
       this.bar.append(b);
     }
-    if (ghost) {
+    if (ghost && !this.lobby) {
       this.stamina = el('div', '', '<div class="meter-label"><span>Relic grip</span><span class="v"></span></div><div class="meter stamina"><i></i></div>');
       this.clump = el('div', '', '<div class="meter-label"><span>Too close to another ghost!</span><span></span></div><div class="meter clump"><i></i></div>');
       this.meters.append(this.clump, this.stamina);
@@ -62,7 +72,47 @@ export class Hud {
     this.indicators = [];
     this.markerEls = new Map();
     this.tagEls = new Map();
-    this.objective(ghost ? 'Find the relic (glowing marker) and carry it to the capture altar.' : 'Listen and watch. Freeze ghosts with the revealer before they deliver the relic three times.');
+    if (this.lobby) {
+      this.objective(ghost
+        ? 'Practise: snap, whistle and haunt the furniture. Stand on the Hunters medallion to switch sides.'
+        : 'Practise with the revealer — it only tickles in here. Stand on the Ghosts medallion to switch sides.');
+    } else {
+      this.objective(ghost ? 'Find the relic (glowing marker) and carry it to the capture altar.' : 'Listen and watch. Freeze ghosts with the revealer before they deliver the relic three times.');
+    }
+  }
+
+  setLobbySub(text) {
+    if (this.lobbySub && this.lobbySub.textContent !== text) this.lobbySub.textContent = text;
+  }
+
+  // Opens the chat input; calls send(text) on Enter. Returns false if there's no chat box.
+  openChat(send) {
+    if (!this.chatbox) return false;
+    const box = this.chatbox;
+    const input = box.querySelector('input');
+    box.classList.remove('hidden');
+    input.value = '';
+    input.focus();
+    input.onkeydown = (e) => {
+      e.stopPropagation();
+      if (e.key === 'Enter') {
+        if (input.value.trim()) send(input.value.trim());
+        this.closeChat();
+      } else if (e.key === 'Escape') {
+        this.closeChat();
+      }
+    };
+    return true;
+  }
+
+  closeChat() {
+    if (!this.chatbox) return;
+    this.chatbox.classList.add('hidden');
+    this.chatbox.querySelector('input').blur();
+  }
+
+  get chatting() {
+    return !!this.chatbox && !this.chatbox.classList.contains('hidden');
   }
 
   objective(text) {

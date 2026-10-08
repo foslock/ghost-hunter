@@ -18,6 +18,7 @@ import { LocalPlayer } from './player.js';
 import { Hud, MAX_CD } from './hud.js';
 import { Input } from './input.js';
 import { makeEnvironment } from './environment.js';
+import { FONTS_READY, drawGhostGuide, drawHunterGuide, drawNotice, drawRules } from './boards.js';
 
 const mapModules = import.meta.glob('../../../shared/maps/*.json');
 
@@ -72,8 +73,9 @@ export class GameView {
     this.me = start.you.id;
     this.role = start.you.role;
     this.isGhost = this.role === ROLES.GHOST;
+    this.lobby = start.mode === 'lobby';   // the waiting room between rounds
     this.roster = new Map(start.roster.map((r) => [r.id, r]));
-    this.phase = PHASE.BLIND;
+    this.phase = this.lobby ? PHASE.LOBBY : PHASE.BLIND;
     this.snap = null;
     this.avatars = new Map();
     this.props = new Map();
@@ -262,7 +264,8 @@ export class GameView {
     }
 
     // UI + input
-    this.hud = new Hud(document.getElementById('hud'), this.role, map.name, map.penalty?.label);
+    this.hud = new Hud(document.getElementById('hud'), this.role, map.name, map.penalty?.label, { lobby: this.lobby });
+    if (this.lobby) this.setupLobby();
     this.input = new Input(this.renderer.domElement);
     this.bindInput();
     this.bindNet();
@@ -296,8 +299,17 @@ export class GameView {
     inp.on('key:KeyG', () => { if (this.isGhost) this.net.send({ t: 'drop' }); });
     inp.on('key:Tab', () => { this.showScores = true; });
     inp.on('keyup:Tab', () => { this.showScores = false; });
+    inp.on('key:Enter', (e) => {
+      if (!this.lobby || this.hud.chatting) return;
+      e?.preventDefault?.();
+      this.hud.openChat((text) => this.net.send({ t: 'chat', text }));
+    });
     inp.on('locked', () => this.app.ui.hidePause());
-    inp.on('unlocked', () => { if (!this.disposed && this.phase !== PHASE.RESULTS) this.app.ui.showPause(this); });
+    inp.on('unlocked', () => {
+      if (this.disposed || this.phase === PHASE.RESULTS || this.switching) return;
+      if (this.lobby) this.app.ui.showLobby(this.app.ui.room, this);
+      else this.app.ui.showPause(this);
+    });
   }
 
   canAct(allowPenalty = false) {
@@ -338,7 +350,7 @@ export class GameView {
 
   doRay() {
     const y = this.snap?.you;
-    if (!y || this.phase !== PHASE.PLAY) return;
+    if (!y || (this.phase !== PHASE.PLAY && this.phase !== PHASE.LOBBY)) return;
     const now = performance.now() / 1000;
     if (y.rc > 0 || now - this.localRayAt < HUNTER.rayCooldown) return;
     this.localRayAt = now;
@@ -676,7 +688,8 @@ export class GameView {
     const s = this.snap;
     hud.tick();
     if (!s) return;
-    hud.setTime(s.ph === PHASE.BLIND ? s.tl : s.tl, s.cap);
+    if (this.lobby) return this.updateLobbyHud(t);
+    hud.setTime(s.tl, s.cap);
     const y = s.you;
     const w = innerWidth, h = innerHeight;
     if (!this.isGhost && s.ph === PHASE.BLIND) hud.setBlind(s.bl);
@@ -752,10 +765,142 @@ export class GameView {
     return rows;
   }
 
-  dispose() {
+  // ---------------------------------------------------------------- waiting room
+  setupLobby() {
+    const L = this.map.lobby || {};
+    const scene = this.scene;
+    this.pads = [];
+    for (const [role, pad] of Object.entries(L.pads || {})) {
+      const col = role === ROLES.HUNTER ? 0xffb36b : 0x9fe8ff;
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(pad.r - 0.12, pad.r, 64).rotateX(-Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }),
+      );
+      ring.position.set(pad.pos[0], pad.pos[1] + 0.02, pad.pos[2]);
+      ring.renderOrder = 2;
+      scene.add(ring);
+      // fills as you stand on the other team's medallion
+      const fill = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color: col, transparent: true, opacity: 0.9, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      fill.position.copy(ring.position);
+      fill.position.y += 0.005;
+      fill.renderOrder = 3;
+      scene.add(fill);
+      this.pads.push({ role, ring, fill, pad, shown: -1 });
+    }
+    // wall boards: the client paints them (live room state, guides, rules)
+    this.boards = {};
+    const defs = L.boards || (L.board ? { notice: L.board } : {});
+    for (const [id, b] of Object.entries(defs)) {
+      const c = document.createElement('canvas');
+      c.width = 1024;
+      c.height = Math.round(1024 * (b.h / b.w));
+      const tex = new THREE.CanvasTexture(c);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 8;
+      const mat = id === 'rules'
+        ? new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.18 })
+        : new THREE.MeshStandardMaterial({ map: tex, roughness: 0.9, emissiveMap: tex, emissive: 0xffffff, emissiveIntensity: 0.32 });
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(b.w, b.h), mat);
+      const n = new THREE.Vector3(...(b.normal || [0, 0, 1]));
+      plane.position.set(...b.pos).addScaledVector(n, 0.02);
+      plane.lookAt(plane.position.clone().add(n));
+      scene.add(plane);
+      this.boards[id] = { canvas: c, tex };
+    }
+    FONTS_READY.then(() => { if (!this.disposed) this.drawBoards(this.room || this.app.ui.room); });
+    // highlight the departure door of the selected map
+    this.destGlow = new THREE.Group();
+    const frameMat = new THREE.MeshBasicMaterial({ color: 0xffd98a, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+    for (const [w, h, x, y] of [[2.4, 0.06, 0, 0.72], [2.4, 0.06, 0, -0.72], [0.06, 1.5, 1.18, 0], [0.06, 1.5, -1.18, 0]]) {
+      const bar = new THREE.Mesh(new THREE.PlaneGeometry(w, h), frameMat);
+      bar.position.set(x, y, 0.06);
+      this.destGlow.add(bar);
+    }
+    this.destLight = new THREE.PointLight(0xffd98a, 0, 6, 1.8);
+    this.destLight.position.set(0, -0.4, 1.0);
+    this.destGlow.add(this.destLight);
+    scene.add(this.destGlow);
+    this.onRoom(this.app.ui.room);
+  }
+
+  // Room updates while in the waiting room: who's here, their teams, the board and the map.
+  onRoom(room) {
+    if (!this.lobby || !room || this.disposed) return;
+    this.room = room;
+    const here = room.players.filter((p) => p.where !== 'round' && p.id !== this.me);
+    const ids = new Set(here.map((p) => p.id));
+    for (const [id, a] of this.avatars) {
+      if (!ids.has(id)) { a.dispose(); this.avatars.delete(id); }
+    }
+    for (const p of here) {
+      this.roster.set(p.id, p);
+      const a = this.avatars.get(p.id);
+      if (a && a.role === p.role) continue;
+      if (a) a.dispose();
+      this.avatars.set(p.id, new Avatar(this, p));
+    }
+    const dest = this.map.lobby?.destinations?.[room.settings.map];
+    this.destGlow.visible = !!dest;
+    if (dest) this.destGlow.position.set(...dest);
+    this.drawBoards(room);
+  }
+
+  drawBoards(room) {
+    if (!room || !this.boards) return;
+    const b = this.boards;
+    if (b.notice) { drawNotice(b.notice.canvas, room); b.notice.tex.needsUpdate = true; }
+    if (b.ghost) { drawGhostGuide(b.ghost.canvas, room.settings); b.ghost.tex.needsUpdate = true; }
+    if (b.hunter) { drawHunterGuide(b.hunter.canvas, room.settings); b.hunter.tex.needsUpdate = true; }
+    if (b.rules) { drawRules(b.rules.canvas, room.settings); b.rules.tex.needsUpdate = true; }
+  }
+
+  updateLobbyHud(t) {
+    const hud = this.hud;
+    const s = this.snap;
+    const y = s.you;
+    const w = innerWidth, h = innerHeight;
+    // the walls carry the instructions; on screen we only keep what the hands need
+    if (this.isGhost) {
+      hud.ability('snap', 0, 1, this.canAct(true));
+      hud.ability('whistle', y.wc, MAX_CD.whistle, this.canAct());
+      hud.ability('subtle', 0, 1, this.canAct() && !!this.target);
+      hud.ability('big', y.bc, MAX_CD.big, this.canAct() && !!this.target);
+      hud.setPrompt(this.target, y.bc);
+    } else {
+      const now = performance.now() / 1000;
+      hud.ability('ray', Math.max(y.rc, HUNTER.rayCooldown - (now - this.localRayAt)), MAX_CD.ray, true);
+    }
+    const tags = [];
+    for (const a of this.avatars.values()) {
+      if (!a.obj.visible || a.alpha < 0.05) continue;
+      const hgt = a.role === ROLES.HUNTER ? 2.15 : 1.9;
+      tags.push({ key: a.id, pos: a.pos.clone().add(new THREE.Vector3(0, hgt, 0)), text: a.name, color: a.role === ROLES.HUNTER ? '#ffb36b' : a.color, alpha: 0.9 });
+    }
+    hud.setTags(tags, this.camera, w, h);
+    if (this.showScores) hud.showScores(true, this.scoreRows());
+    else hud.showScores(false);
+    // medallions breathe; the one you're switching to fills up around you
+    const other = this.isGhost ? ROLES.HUNTER : ROLES.GHOST;
+    for (const p of this.pads || []) {
+      p.ring.material.opacity = 0.35 + 0.25 * Math.sin(t * 2 + (p.role === ROLES.HUNTER ? 0 : 1.5));
+      p.ring.rotation.y = t * 0.2;
+      const k = p.role === other ? Math.min(1, (s.pad || 0) / 1.0) : 0;
+      const q = Math.round(k * 48);
+      if (q !== p.shown) {
+        p.shown = q;
+        p.fill.geometry.dispose();
+        p.fill.geometry = q > 0
+          ? new THREE.RingGeometry(p.pad.r - 0.42, p.pad.r - 0.16, 64, 1, Math.PI / 2, -(q / 48) * Math.PI * 2).rotateX(-Math.PI / 2)
+          : new THREE.BufferGeometry();
+      }
+    }
+    if (this.destLight) this.destLight.intensity = 5 + Math.sin(t * 2.4) * 1.5;
+  }
+
+  dispose({ keepLock = false } = {}) {
     this.disposed = true;
     for (const u of this.unsub) u();
-    this.input?.dispose();
+    this.input?.dispose({ keepLock });
     this.hud?.dispose();
     this.audio.stopAll();
     window.removeEventListener('resize', this._resize);
@@ -801,6 +946,20 @@ function carriedBy(a, out) {
 
 function round(v) {
   return Math.round(v * 1000) / 1000;
+}
+
+function wrap(g, text, x, y, maxW, lh) {
+  const words = String(text || '').split(' ');
+  let line = '';
+  for (const word of words) {
+    const test = line ? `${line} ${word}` : word;
+    if (g.measureText(test).width > maxW && line) {
+      g.fillText(line, x, y);
+      line = word;
+      y += lh;
+    } else line = test;
+  }
+  if (line) g.fillText(line, x, y);
 }
 
 function projectBox(box, cam, w, h) {

@@ -7,18 +7,21 @@ import { Bot } from './bots.js';
 const r2 = (v) => Math.round(v * 100) / 100;
 const r3 = (v) => Math.round(v * 1000) / 1000;
 
+// A Game is either a round (`mode: 'round'`) or the always-running waiting room (`mode: 'lobby'`),
+// where everyone is visible, players come and go, and nothing has consequences.
 export class Game {
-  constructor(room, mapEntry, settings, roster, rng = Math.random) {
+  constructor(room, mapEntry, settings, roster, rng = Math.random, mode = 'round') {
     this.room = room;
     this.map = mapEntry.data;
     this.world = mapEntry.world;
     this.nav = mapEntry.nav;
     this.settings = settings;
     this.rng = rng;
+    this.lobby = mode === 'lobby';
     this.time = 0;
-    this.phase = PHASE.BLIND;
-    this.phaseEnd = HUNTER.blindTime;
-    this.timeLeft = settings.roundTime;
+    this.phase = this.lobby ? PHASE.LOBBY : PHASE.BLIND;
+    this.phaseEnd = this.lobby ? Infinity : HUNTER.blindTime;
+    this.timeLeft = this.lobby ? Infinity : settings.roundTime;
     this.captures = 0;
     this.result = null;
     this.snapAcc = 0;
@@ -26,24 +29,11 @@ export class Game {
     this.props = new Map(this.map.props.map((p) => [p.id, { ...p, bigUntil: -1 }]));
     this.drips = 0;
     this.history = [];
-
-    const hs = [...this.map.spawns.hunter];
-    const gs = shuffle([...this.map.spawns.ghost], rng);
-    let hi = 0, gi = 0;
-    for (const r of roster) {
-      const sp = r.role === ROLES.HUNTER ? hs[hi++ % hs.length] : gs[gi++ % gs.length];
-      const p = {
-        id: r.id, name: r.name, role: r.role, color: r.color, isBot: !!r.bot,
-        pos: { x: sp[0], y: sp[1], z: sp[2] }, yaw: sp[3] ?? 0, pitch: 0,
-        lastMove: 0, tpSeq: 1, outbox: [],
-        frozenUntil: -1, penaltyUntil: -1, exposedUntil: -1, clump: 0, near: false,
-        stamina: settings.carryLimit, carrying: false,
-        nextWhistle: 0, nextBig: 0, nextSubtle: 0, nextSnap: 0, nextRay: 0,
-        stats: { freezes: 0, frozen: 0, captures: 0, carry: 0, snaps: 0, whistles: 0, manips: 0, shots: 0 },
-      };
-      if (r.bot) p.bot = new Bot(this, p, r.bot);
-      this.players.set(r.id, p);
-    }
+    this.spawnQueue = { hunter: [...this.map.spawns.hunter], ghost: shuffle([...this.map.spawns.ghost], rng) };
+    this.spawnIndex = { hunter: 0, ghost: 0 };
+    for (const r of roster) this.addPlayer(r);
+    this.relic = null;
+    if (this.lobby) return;
 
     // relic pairs: precompute every altar pair that is far enough apart
     const fp = this.map.flagPoints;
@@ -57,6 +47,39 @@ export class Game {
     this.newPair();
   }
 
+  nextSpawn(role) {
+    const list = this.spawnQueue[role] || this.spawnQueue.ghost;
+    const i = this.spawnIndex[role]++;
+    return list[i % list.length];
+  }
+
+  addPlayer(r) {
+    const sp = this.nextSpawn(r.role);
+    const p = {
+      id: r.id, name: r.name, role: r.role, color: r.color, isBot: !!r.bot,
+      pos: { x: sp[0], y: sp[1], z: sp[2] }, yaw: sp[3] ?? 0, pitch: 0,
+      lastMove: this.time, tpSeq: 1, outbox: [],
+      frozenUntil: -1, penaltyUntil: -1, exposedUntil: -1, clump: 0, near: false,
+      stamina: this.settings.carryLimit, carrying: false,
+      nextWhistle: 0, nextBig: 0, nextSubtle: 0, nextSnap: 0, nextRay: 0, padTime: 0, padRole: null,
+      stats: { freezes: 0, frozen: 0, captures: 0, carry: 0, snaps: 0, whistles: 0, manips: 0, shots: 0 },
+    };
+    if (r.bot) p.bot = new Bot(this, p, r.bot);
+    this.players.set(r.id, p);
+    return p;
+  }
+
+  // waiting room only: change a player's team in place
+  setRole(id, role) {
+    const p = this.players.get(id);
+    if (!p || p.role === role) return;
+    p.role = role;
+    p.frozenUntil = -1;
+    p.nextWhistle = p.nextBig = p.nextRay = 0;
+    p.padBlock = true; // pads only count again once you've stepped off them
+    if (p.bot) p.bot.onTeleport();
+  }
+
   // ------------------------------------------------------------ helpers
   get ghosts() { return [...this.players.values()].filter((p) => p.role === ROLES.GHOST); }
   get hunters() { return [...this.players.values()].filter((p) => p.role === ROLES.HUNTER); }
@@ -64,7 +87,7 @@ export class Game {
   inPenalty(p) { return p.penaltyUntil > this.time; }
   isExposed(p) { return p.exposedUntil > this.time; }
   active(p) { return !this.isFrozen(p) && !this.inPenalty(p); }
-  playing() { return this.phase === PHASE.PLAY || this.phase === PHASE.BLIND; }
+  playing() { return this.phase === PHASE.PLAY || this.phase === PHASE.BLIND || this.phase === PHASE.LOBBY; }
 
   eye(p) {
     return { x: p.pos.x, y: p.pos.y + (p.role === ROLES.GHOST ? 1.35 : PLAYER.eye), z: p.pos.z };
@@ -194,7 +217,7 @@ export class Game {
 
   dropRelic(p, reason = 'drop') {
     const rel = this.relic;
-    if (rel.holder !== p.id) return;
+    if (!rel || rel.holder !== p.id) return;
     p.carrying = false;
     rel.holder = null;
     rel.lastHolder = p.id;
@@ -208,7 +231,7 @@ export class Game {
   }
 
   ray(p, dir) {
-    if (p.role !== ROLES.HUNTER || this.phase !== PHASE.PLAY || this.time < p.nextRay) return;
+    if (p.role !== ROLES.HUNTER || (this.phase !== PHASE.PLAY && !this.lobby) || this.time < p.nextRay) return;
     if (!Array.isArray(dir) || dir.length !== 3 || !dir.every(Number.isFinite)) return;
     const len = Math.hypot(dir[0], dir[1], dir[2]);
     if (len < 1e-3) return;
@@ -245,6 +268,13 @@ export class Game {
   }
 
   freeze(g, hunter) {
+    if (this.lobby) {
+      // practice: a short freeze, no penalty box
+      g.frozenUntil = this.time + 1.5;
+      this.emit({ e: 'freeze', id: g.id, by: hunter?.id, p: [r2(g.pos.x), r2(g.pos.y), r2(g.pos.z)] });
+      this.feed(`${hunter ? hunter.name : 'Someone'} practised on ${g.name}`, 'all', 'freeze');
+      return;
+    }
     g.frozenUntil = this.time + GHOST.freezeTime;
     g.stats.frozen++;
     if (hunter) hunter.stats.freezes++;
@@ -266,8 +296,39 @@ export class Game {
   }
 
   // ------------------------------------------------------------ simulation
+  tickLobby(dt) {
+    if (!this.botsPaused) for (const p of this.players.values()) if (p.bot) p.bot.update(dt);
+    for (const p of this.players.values()) if (p.frozenUntil > 0 && this.time >= p.frozenUntil) p.frozenUntil = -1;
+    // team pads: stand on one for a moment to switch sides
+    const pads = this.map.lobby?.pads || {};
+    for (const p of this.players.values()) {
+      if (p.isBot) continue;
+      let on = null;
+      for (const [role, pad] of Object.entries(pads)) {
+        if (Math.hypot(p.pos.x - pad.pos[0], p.pos.z - pad.pos[2]) <= pad.r && Math.abs(p.pos.y - pad.pos[1]) < 1.2) on = role;
+      }
+      if (!on) p.padBlock = false;
+      if (on && !p.padBlock && on !== p.role && on === p.padRole) {
+        p.padTime += dt;
+        if (p.padTime >= 1.0) {
+          p.padTime = 0;
+          this.room.setRole(p.id, on);
+        }
+      } else {
+        p.padTime = 0;
+      }
+      p.padRole = on;
+    }
+    const snap = new Map();
+    for (const g of this.ghosts) snap.set(g.id, { ...g.pos });
+    this.history.push({ t: this.time, pos: snap });
+    while (this.history.length && this.history[0].t < this.time - 0.6) this.history.shift();
+    this.sendSnapshots(dt);
+  }
+
   tick(dt) {
     this.time += dt;
+    if (this.lobby) return this.tickLobby(dt);
     if (this.phase === PHASE.RESULTS) {
       this.sendSnapshots(dt);
       return;
@@ -422,9 +483,9 @@ export class Game {
   removePlayer(id) {
     const p = this.players.get(id);
     if (!p) return;
-    if (this.relic.holder === id) this.dropRelic(p, 'left');
+    if (this.relic?.holder === id) this.dropRelic(p, 'left');
     this.players.delete(id);
-    if (this.phase !== PHASE.RESULTS) {
+    if (!this.lobby && this.phase !== PHASE.RESULTS) {
       if (!this.hunters.length) this.finish(ROLES.GHOST, 'forfeit');
       else if (!this.ghosts.length) this.finish(ROLES.HUNTER, 'forfeit');
     }
@@ -432,7 +493,7 @@ export class Game {
 
   // ------------------------------------------------------------ snapshots
   visibleTo(viewer, other) {
-    if (this.phase === PHASE.RESULTS) return true;
+    if (this.phase === PHASE.RESULTS || this.lobby) return true;
     if (other.role === ROLES.HUNTER) return true;
     if (this.inPenalty(other) || this.isFrozen(other) || this.isExposed(other)) return true;
     if (viewer.role === ROLES.GHOST && !this.inPenalty(viewer)) {
@@ -457,7 +518,7 @@ export class Game {
         if (this.isExposed(o)) f |= PF.EXPOSED;
         if (this.inPenalty(o)) f |= PF.PENALTY;
         if (o.carrying) f |= PF.CARRYING;
-        if (viewer.role === ROLES.GHOST && o.role === ROLES.GHOST && !(f & (PF.FROZEN | PF.EXPOSED | PF.PENALTY))) f |= PF.NEAR;
+        if (!this.lobby && viewer.role === ROLES.GHOST && o.role === ROLES.GHOST && !(f & (PF.FROZEN | PF.EXPOSED | PF.PENALTY))) f |= PF.NEAR;
         pl.push([o.id, r2(o.pos.x), r2(o.pos.y), r2(o.pos.z), r3(o.yaw), r3(o.pitch), f]);
       }
       const you = {
@@ -466,8 +527,10 @@ export class Game {
         wc: r2(Math.max(0, viewer.nextWhistle - this.time)), bc: r2(Math.max(0, viewer.nextBig - this.time)),
         rc: r2(Math.max(0, viewer.nextRay - this.time)), cl: r2(viewer.clump / GHOST.clumpLimit), ca: viewer.carrying ? 1 : 0,
       };
-      const msg = { t: 's', ph: this.phase, tl: Math.ceil(this.timeLeft), bl: r2(Math.max(0, this.phaseEnd - this.time)), cap: this.captures, pl, you };
-      if (viewer.role === ROLES.GHOST || this.phase === PHASE.RESULTS) {
+      const msg = { t: 's', ph: this.phase, tl: this.lobby ? 0 : Math.ceil(this.timeLeft), bl: this.lobby ? 0 : r2(Math.max(0, this.phaseEnd - this.time)), cap: this.captures, pl, you };
+      if (this.lobby) {
+        msg.pad = viewer.padRole && viewer.padRole !== viewer.role ? r2(viewer.padTime) : 0;
+      } else if (viewer.role === ROLES.GHOST || this.phase === PHASE.RESULTS) {
         msg.r = { s: rel.state, p: [r2(rel.pos.x), r2(rel.pos.y), r2(rel.pos.z)], h: rel.holder, sp: fp[rel.spawn].id, cp: fp[rel.capture].id, ch: r2(rel.channel / RELIC.captureChannel) };
       } else if (rel.holder) {
         const h = this.players.get(rel.holder);

@@ -1,4 +1,5 @@
-// A lobby that hosts consecutive rounds. The host picks the map, settings and team sizes.
+// A room hosts consecutive rounds. Between rounds (and for anyone who joins mid-round) players
+// share an in-world waiting room; the host picks the map, settings and team sizes from there.
 import { GHOST_NAMES, HUNTER_NAMES, LOBBY_LIMITS, PHASE, PLAYER_COLORS, RELIC, ROLES, ROUND, TICK_RATE } from '../shared/constants.js';
 import { Game } from './game.js';
 import { availableMaps, loadMap } from './maps.js';
@@ -22,10 +23,36 @@ export class Room {
     };
     this.lastRound = null;
     this.created = Date.now();
+    this.lobby = this.makeLobby([]);
   }
 
   get phase() { return this.game ? 'game' : 'lobby'; }
   get humans() { return [...this.players.values()].filter((p) => !p.bot); }
+
+  rosterEntry(p) {
+    return { id: p.id, name: p.name, role: p.role, color: p.color, bot: p.bot };
+  }
+
+  makeLobby(players) {
+    const entry = loadMap('lobby');
+    if (!entry) throw new Error('The waiting room map (shared/maps/lobby.json) is missing.');
+    return new Game(this, entry, { ...this.settings }, players.map((p) => this.rosterEntry(p)), Math.random, 'lobby');
+  }
+
+  // Put a human into the waiting room view (also used to rebuild their view after a team change).
+  enterLobby(p) {
+    const gp = this.lobby.players.get(p.id);
+    if (!gp || p.bot) return;
+    this.send(p.id, {
+      t: 'start', mode: 'lobby', map: 'lobby', settings: this.settings,
+      you: { id: p.id, role: p.role, pos: [gp.pos.x, gp.pos.y, gp.pos.z], yaw: gp.yaw, seq: gp.tpSeq },
+      roster: [...this.lobby.players.values()].map((o) => ({ id: o.id, name: o.name, role: o.role, color: o.color, bot: o.isBot })),
+    });
+  }
+
+  inRound(id) {
+    return !!this.game?.players.has(id);
+  }
 
   // ------------------------------------------------------------ membership
   addHuman(id, name, ws) {
@@ -34,8 +61,9 @@ export class Room {
     const p = { id, name: this.uniqueName(name), ws, bot: null, role, color: this.freeColor() };
     this.players.set(id, p);
     if (!this.hostId) this.hostId = id;
+    this.lobby.addPlayer(this.rosterEntry(p));
     this.broadcastRoom();
-    if (this.game) this.send(id, { t: 'wait', captures: this.game.captures, timeLeft: Math.ceil(this.game.timeLeft) });
+    this.enterLobby(p);
     return p;
   }
 
@@ -45,7 +73,20 @@ export class Room {
     const used = new Set([...this.players.values()].map((p) => p.name));
     const base = pool.find((n) => !used.has(`${n} (bot)`)) || `${pool[0]}${this.players.size}`;
     const id = this.server.nextId();
-    this.players.set(id, { id, name: `${base} (bot)`, ws: null, bot: { skill: this.settings.botSkill }, role, color: this.freeColor() });
+    const p = { id, name: `${base} (bot)`, ws: null, bot: { skill: this.settings.botSkill }, role, color: this.freeColor() };
+    this.players.set(id, p);
+    this.lobby.addPlayer(this.rosterEntry(p));
+    this.broadcastRoom();
+  }
+
+  setRole(id, role) {
+    const p = this.players.get(id);
+    if (!p || p.role === role || (role !== ROLES.HUNTER && role !== ROLES.GHOST)) return;
+    p.role = role;
+    if (this.lobby.players.has(id)) {
+      this.lobby.setRole(id, role);
+      this.enterLobby(p);
+    }
     this.broadcastRoom();
   }
 
@@ -53,6 +94,7 @@ export class Room {
     const p = this.players.get(id);
     if (!p) return;
     this.players.delete(id);
+    this.lobby.removePlayer(id);
     if (this.game) this.game.removePlayer(id);
     if (this.hostId === id) this.hostId = this.humans[0]?.id ?? null;
     if (!this.humans.length) {
@@ -85,8 +127,9 @@ export class Room {
     const p = this.players.get(id);
     if (!p) return;
     const isHost = id === this.hostId;
-    const g = this.game;
+    const g = this.inRound(id) ? this.game : this.lobby;   // the world this player is in
     const gp = g?.players.get(id);
+    const roundOn = !!this.game;
     switch (msg.t) {
       case 'st': if (gp) g.onState(gp, msg); break;
       case 'snap': if (gp) g.snap(gp); break;
@@ -111,16 +154,15 @@ export class Room {
         if (msg.expose) for (const o of g.ghosts) o.exposedUntil = g.time + 30;
         if (msg.freeze) for (const o of g.ghosts) if (o.id !== gp.id) g.freeze(o, null);
         break;
-      case 'settings': if (isHost && !g) this.applySettings(msg); break;
+      case 'settings': if (isHost && !roundOn) this.applySettings(msg); break;
       case 'team': {
         const target = this.players.get(String(msg.id ?? id));
-        if (!target || g || (target.id !== id && !isHost)) break;
-        if (msg.role === ROLES.HUNTER || msg.role === ROLES.GHOST) target.role = msg.role;
-        this.broadcastRoom();
+        if (!target || this.inRound(target.id) || (target.id !== id && !isHost)) break;
+        this.setRole(target.id, msg.role);
         break;
       }
-      case 'shuffle': if (isHost && !g) this.shuffle(msg.hunters); break;
-      case 'addBot': if (isHost && !g) this.addBot(msg.role === ROLES.HUNTER ? ROLES.HUNTER : ROLES.GHOST); break;
+      case 'shuffle': if (isHost && !roundOn) this.shuffle(msg.hunters); break;
+      case 'addBot': if (isHost && !roundOn) this.addBot(msg.role === ROLES.HUNTER ? ROLES.HUNTER : ROLES.GHOST); break;
       case 'kick': {
         const target = this.players.get(String(msg.id));
         if (!isHost || !target || target.id === id) break;
@@ -133,11 +175,12 @@ export class Room {
         if (isHost && target && !target.bot) { this.hostId = target.id; this.broadcastRoom(); }
         break;
       }
-      case 'start': if (isHost && !g) this.start(); break;
-      case 'lobby': if (isHost && g) this.endGame(); break;
+      case 'start': if (isHost && !roundOn) this.start(); break;
+      case 'lobby': if (isHost && roundOn) this.endGame(); break;
       case 'chat': {
+        // no chatting from inside a live round (ghosts would just type their positions)
         const text = String(msg.text || '').slice(0, 160).trim();
-        if (text && (!g || g.phase === PHASE.RESULTS)) this.broadcast({ t: 'chat', from: p.name, color: p.color, text });
+        if (text && (!this.inRound(id) || this.game.phase === PHASE.RESULTS)) this.broadcast({ t: 'chat', from: p.name, color: p.color, text });
         break;
       }
       default: break;
@@ -164,7 +207,7 @@ export class Room {
       const j = (Math.random() * (i + 1)) | 0;
       [list[i], list[j]] = [list[j], list[i]];
     }
-    list.forEach((p, i) => { p.role = i < n ? ROLES.HUNTER : ROLES.GHOST; });
+    list.forEach((p, i) => this.setRole(p.id, i < n ? ROLES.HUNTER : ROLES.GHOST));
     this.broadcastRoom();
   }
 
@@ -179,13 +222,14 @@ export class Room {
       this.send(this.hostId, { t: 'error', msg: `Map ${this.settings.map} is not built.` });
       return;
     }
-    const roster = [...this.players.values()].map((p) => ({ id: p.id, name: p.name, role: p.role, color: p.color, bot: p.bot }));
+    const roster = [...this.players.values()].map((p) => this.rosterEntry(p));
     this.game = new Game(this, entry, { ...this.settings }, roster);
+    this.lobby = this.makeLobby([]); // everyone is in the round; latecomers wait here
     for (const p of this.players.values()) {
       if (p.bot) continue;
       const gp = this.game.players.get(p.id);
       this.send(p.id, {
-        t: 'start', map: this.settings.map, settings: this.settings,
+        t: 'start', mode: 'round', map: this.settings.map, settings: this.settings,
         you: { id: p.id, role: p.role, pos: [gp.pos.x, gp.pos.y, gp.pos.z], yaw: gp.yaw, seq: gp.tpSeq },
         roster: roster.map(({ id, name, role, color, bot }) => ({ id, name, role, color, bot: !!bot })),
       });
@@ -196,12 +240,14 @@ export class Room {
   endGame() {
     if (this.game?.result) this.lastRound = this.game.result;
     this.game = null;
-    // players who joined mid-round are already in this.players
-    this.broadcast({ t: 'lobby' });
+    // back to the waiting room together (including anyone who arrived mid-round)
+    this.lobby = this.makeLobby([...this.players.values()]);
     this.broadcastRoom();
+    for (const p of this.players.values()) this.enterLobby(p);
   }
 
   tick(dt) {
+    this.lobby.tick(dt);
     if (!this.game) return;
     this.game.tick(dt);
     if (this.game.phase === PHASE.RESULTS && this.game.time >= this.game.phaseEnd) this.endGame();
@@ -212,7 +258,10 @@ export class Room {
     return {
       t: 'room', code: this.code, host: this.hostId, phase: this.phase, settings: this.settings,
       maps: availableMaps(this.server.dev), lastRound: this.lastRound,
-      players: [...this.players.values()].map((p) => ({ id: p.id, name: p.name, role: p.role, color: p.color, bot: !!p.bot })),
+      round: this.game ? { timeLeft: Math.ceil(this.game.timeLeft), captures: this.game.captures, map: this.game.map.id } : null,
+      players: [...this.players.values()].map((p) => ({
+        id: p.id, name: p.name, role: p.role, color: p.color, bot: !!p.bot, where: this.inRound(p.id) ? 'round' : 'lobby',
+      })),
     };
   }
 

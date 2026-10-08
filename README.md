@@ -32,8 +32,12 @@ same branch layout as decks-and-hexes: **`ghost-hunter`** deploys from the `prod
 `npm start`, which serves the client and the WebSocket game on one port (`/healthz` for health
 checks). There is no database. To release, fast-forward `production` to `main` and push.
 
-Open the page, create a room, share the four-letter code (or the invite link) and start. Add bots
-from the lobby to fill teams or play solo. Requires a desktop browser with keyboard and mouse.
+Open the page, sign the ticket and board a new train (or punch in a friend's four-letter code). Everyone
+gathers in **the Waiting Room**, a station hall where you can walk around, snap, whistle, haunt the
+furniture and practise with the revealer. The rules and controls are written on its walls, standing
+on the Hunters or Ghosts floor medallion switches sides, and the notice board shows the next
+destination. Press Esc for the room menu, where the host picks the map, rules and bots and starts
+the round; Enter to chat. Requires a desktop browser with keyboard and mouse.
 
 Other scripts:
 
@@ -45,7 +49,7 @@ Other scripts:
 | `npm run maps` | rebuild every map and the character models with Blender |
 
 Dev shortcut: `http://localhost:5173/?test=ghost&map=farm&bots=4` creates a room with bots and
-starts immediately as the given role.
+starts immediately as the given role (add `&stay=1` to stay in the waiting room).
 
 ## How to play
 
@@ -88,10 +92,12 @@ Things to watch for: snaps and whistles (direction arcs around the crosshair), b
 subtle haunts — a clock ticking backwards, a curtain breathing, a chandelier swaying a little
 wider, a chair that has moved a few centimetres — the ectoplasm trail and the relic's hum.
 
-### Host options
+### Host options (room menu, Esc in the waiting room)
 
 Map, round length, penalty time, relic grip, bot skill, and teams: move any player between
 Hunters and Ghosts, add/remove bots on either side, or shuffle with a chosen number of hunters.
+Players can also switch their own side by standing on a medallion. People who join mid-round wait in
+the waiting room and come along on the next one.
 
 ## Maps
 
@@ -108,7 +114,8 @@ Each has 13 identical altars, 12–14 ghost spawns and ~130 interactive props ac
 ```
 shared/     rules shared by server and client: constants, AABB collision, nav grid, prop archetypes
             maps/<id>.json  gameplay data exported from Blender (colliders, props, altars, spawns, lights)
-server/     Node WebSocket server: rooms/lobby (room.js), authoritative round (game.js), bots (bots.js)
+server/     Node WebSocket server: rooms (room.js), authoritative simulation for rounds and the
+            always-running waiting room (game.js, `mode: 'lobby'`), bots (bots.js)
 client/     Vite + three.js: lobby UI, first-person controller, prop animation, procedural audio, HUD
 blender/    map toolkit (lib/), map scripts (maps/), character models (characters.py)
 docs/       MAP_AUTHORING.md — how to build a map and the prop archetype contract

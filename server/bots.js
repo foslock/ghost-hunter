@@ -77,13 +77,29 @@ export class Bot {
     }
     if (g.time >= this.nextThink) {
       this.nextThink = g.time + 0.4 + Math.random() * 0.3;
-      if (p.role === ROLES.GHOST) this.thinkGhost();
+      if (g.lobby) this.thinkLobby();
+      else if (p.role === ROLES.GHOST) this.thinkGhost();
       else this.thinkHunter();
     }
     if (p.role === ROLES.HUNTER) this.combat(dt);
     else this.ghostActions();
     this.steer(dt);
     this.physics(dt);
+  }
+
+  // ------------------------------------------------------------ waiting room: mill about
+  thinkLobby() {
+    const g = this.game;
+    if (!this.goal || g.time > this.goalUntil || this.arrived()) {
+      if (Math.random() < 0.35) {
+        this.goal = null; // stand around for a bit
+        this.path = null;
+        this.goalUntil = g.time + 2 + Math.random() * 4;
+        return;
+      }
+      const pt = g.nav.randomWalkable(Math.random);
+      if (pt) this.setGoal(pt, 'wander', 6 + Math.random() * 6);
+    }
   }
 
   // ------------------------------------------------------------ ghost brain
@@ -132,7 +148,7 @@ export class Bot {
 
   ghostActions() {
     const g = this.game, p = this.p;
-    if (!g.active(p) || g.phase !== PHASE.PLAY) return;
+    if (!g.active(p) || (g.phase !== PHASE.PLAY && !g.lobby)) return;
     if (g.time > this.nextSnap) {
       this.nextSnap = g.time + 4 + Math.random() * 10;
       // a sensible ghost doesn't snap right next to a hunter
@@ -146,7 +162,7 @@ export class Bot {
         const near = [...g.props.values()].filter((pr) => Math.hypot(pr.pos[0] - e.x, pr.pos[1] - e.y, pr.pos[2] - e.z) < GHOST.manipReach - 0.5);
         if (near.length) {
           const pr = near[(Math.random() * near.length) | 0];
-          const carrierFar = !g.relic.holder || g.relic.holder === p.id ? false : true;
+          const carrierFar = g.lobby || (g.relic.holder && g.relic.holder !== p.id);
           const big = g.time >= p.nextBig && carrierFar && Math.random() < 0.5;
           g.manip(p, pr.id, big ? 'b' : 's');
         }

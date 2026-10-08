@@ -31,7 +31,7 @@ export function loadMap(id) {
 // Maps the lobby offers: the official three when built, plus any other JSON (dev sandbox etc).
 export function availableMaps(dev) {
   const files = fs.existsSync(dir) ? fs.readdirSync(dir).filter((f) => f.endsWith('.json')) : [];
-  const ids = files.map((f) => f.replace(/\.json$/, ''));
+  const ids = files.map((f) => f.replace(/\.json$/, '')).filter((id) => id !== 'lobby');
   const out = [];
   for (const m of MAPS) if (ids.includes(m.id)) out.push(m);
   if (dev || out.length === 0) {
