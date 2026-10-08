@@ -1,0 +1,26 @@
+services:
+  # Game server (production): one Node service serves the built client and the WebSocket game.
+  - type: web
+    name: ghost-hunter
+    runtime: node
+    plan: starter
+    branch: production
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+    healthCheckPath: /healthz
+
+  # Game server (staging)
+  - type: web
+    name: ghost-hunter-staging
+    runtime: node
+    plan: starter
+    branch: main
+    buildCommand: npm ci --include=dev && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_VERSION
+        value: "24"
+    healthCheckPath: /healthz

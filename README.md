@@ -21,6 +21,14 @@ npm run build
 npm start          # serves dist/ and the WebSocket game server on $PORT (default 5173)
 ```
 
+### Deploying (Render)
+
+`render.yaml` is a Render Blueprint with two Node web services on the starter plan, following the
+same branch layout as decks-and-hexes: **`ghost-hunter`** deploys from the `production` branch and
+**`ghost-hunter-staging`** from `main`. Each runs `npm ci --include=dev && npm run build`, then
+`npm start`, which serves the client and the WebSocket game on one port (`/healthz` for health
+checks). There is no database. To release, fast-forward `production` to `main` and push.
+
 Open the page, create a room, share the four-letter code (or the invite link) and start. Add bots
 from the lobby to fill teams or play solo. Requires a desktop browser with keyboard and mouse.
 
